@@ -16,3 +16,6 @@ test-results/
 # Vite bundles the client; tsc is type-check only there. Guard against stray
 # compiled output ever shadowing .ts/.tsx sources (Vite resolves .js first).
 client/src/**/*.js
+
+# start-local.sh runtime (logs + downloaded cloudflared)
+.run/
