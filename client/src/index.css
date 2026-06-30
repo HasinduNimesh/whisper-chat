@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-wa-panel text-wa-primary font-sans antialiased;
+  }
+  ::selection {
+    @apply bg-wa-green/30 text-white;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-white/10;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    @apply bg-white/20;
+  }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+  }
+
+  /* WhatsApp-style chat wallpaper: dark base + faint repeating doodles. */
+  .wa-chat-bg {
+    background-color: #0b141a;
+    background-image: url('/chat-bg.svg');
+    background-size: 380px auto;
+  }
+
+  /* Bubble tails: a small triangle on the first message of a group. */
+  .wa-tail-out::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: -7px;
+    width: 8px;
+    height: 13px;
+    background: #005c4b;
+    clip-path: polygon(0 0, 0 100%, 100% 0);
+  }
+  .wa-tail-in::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -7px;
+    width: 8px;
+    height: 13px;
+    background: #202c33;
+    clip-path: polygon(100% 0, 100% 100%, 0 0);
+  }
+}

@@ -1,0 +1,29 @@
+# systemd unit for the Whisper signaling/relay server.
+#
+#   sudo cp deploy/whisper-signaling.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now whisper-signaling
+#   systemctl status whisper-signaling
+#
+# Adjust WorkingDirectory / ExecStart paths and User to match your deployment.
+[Unit]
+Description=Whisper signaling/relay server (WebSocket)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/whisper/server
+# Run the TypeScript server directly with tsx (resolves the @private-chat/shared
+# workspace and transpiles on the fly — no separate build step needed).
+ExecStart=/srv/whisper/node_modules/.bin/tsx src/index.ts
+Environment=NODE_ENV=production
+Environment=PORT=8787
+# Keep the server private; only nginx (same box) reaches it.
+Environment=HOST=127.0.0.1
+Restart=always
+RestartSec=3
+User=www-data
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target
