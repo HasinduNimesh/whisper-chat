@@ -133,6 +133,12 @@ export const Search = (p: IconProps) => (
   </Base>
 );
 
+export const Check = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 12l5 5 11-11" />
+  </Base>
+);
+
 export const CheckCheck = (p: IconProps) => (
   <Base {...p}>
     <path d="M2 13l4 4 8-9M11 17l1 1 9-10" />
@@ -194,6 +200,14 @@ export const BookOpen = (p: IconProps) => (
   <Base {...p}>
     <path d="M12 6.5c-1.5-1-4-1.5-6-1.5v13c2 0 4.5.5 6 1.5 1.5-1 4-1.5 6-1.5V5c-2 0-4.5.5-6 1.5z" />
     <path d="M12 6.5V19" />
+  </Base>
+);
+
+/** Regenerate/refresh — two curved arrows forming a loop. */
+export const Refresh = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 12a8 8 0 0 1 13.9-5.4M20 12a8 8 0 0 1-13.9 5.4" />
+    <path d="M18 4v4h-4M6 20v-4h4" />
   </Base>
 );
 

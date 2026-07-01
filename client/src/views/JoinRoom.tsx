@@ -1,20 +1,45 @@
 import { useId, useState, type FormEvent, type ReactNode } from 'react';
 import { useChatStore } from '../store/useChatStore';
 import { ROOM_MIN_PEERS, ROOM_MAX_PEERS } from '@private-chat/shared';
-import { Lock, Shield, Users, Plus, ArrowLeft } from '../components/icons';
+import { Lock, Shield, Users, Refresh, Plus, ArrowLeft, Check } from '../components/icons';
 import { DocsLink } from '../components/DocsLink';
 import { ImportIdentityModal } from '../components/IdentityBackup';
 import { ContactsPanel } from '../components/Contacts';
 
-/** Landing screen: pick a display name, then join a room or open a contact. */
+/** Unambiguous alphabet (no 0/O/1/l/i) with ~59 bits of entropy, grouped for
+ * readability. Room codes are the only thing gating access, so they must be
+ * hard to guess: a CSPRNG is used, never Math.random. */
+function randomInviteCode(): string {
+  const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  let code = '';
+  for (let i = 0; i < bytes.length; i++) {
+    code += alphabet[bytes[i] % alphabet.length];
+    if (i % 4 === 3 && i !== bytes.length - 1) code += '-';
+  }
+  return code;
+}
+
+type Mode = 'start' | 'join' | 'contacts';
+
+/**
+ * Landing screen. First-time users get one obvious primary action — start a
+ * new chat — with joining-by-code and saved contacts presented as clearly
+ * separate, equally-weighted alternatives rather than an ambiguous 2-way tab.
+ */
 export function JoinRoom() {
   const join = useChatStore((s) => s.join);
   const status = useChatStore((s) => s.status);
   const errorText = useChatStore((s) => s.errorText);
 
-  const [tab, setTab] = useState<'room' | 'contacts'>('room');
+  const [mode, setMode] = useState<Mode>('start');
   const [name, setName] = useState('');
-  const [room, setRoom] = useState('');
+  // Pre-generated so the default ("start a new chat") screen never shows an
+  // empty, unexplained code field — the whole point is to remove the extra
+  // "now click New" step that used to gate the most common first action.
+  const [room, setRoom] = useState(() => randomInviteCode());
+  const [copied, setCopied] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [imported, setImported] = useState(false);
 
@@ -25,7 +50,25 @@ export function JoinRoom() {
 
   const connecting = status === 'connecting';
   const trimmedRoom = room.trim();
-  const canJoin = trimmedRoom.length > 0 && !connecting;
+  const canSubmit = trimmedRoom.length > 0 && !connecting;
+
+  function selectMode(next: Mode) {
+    setMode(next);
+    setCopied(false);
+    if (next === 'start') setRoom(randomInviteCode());
+    if (next === 'join') setRoom('');
+  }
+
+  function regenerate() {
+    setRoom(randomInviteCode());
+    setCopied(false);
+  }
+
+  async function copyCode() {
+    if (!trimmedRoom) return;
+    await navigator.clipboard.writeText(trimmedRoom);
+    setCopied(true);
+  }
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -33,21 +76,6 @@ export function JoinRoom() {
     const trimmedName = name.trim() || 'Anonymous';
     if (!trimmedRoom) return;
     void join(trimmedRoom, trimmedName);
-  }
-
-  function generateRoom() {
-    // Room codes are the only thing gating access, so they must be hard to
-    // guess: use a CSPRNG (not Math.random) with ~59 bits of entropy over an
-    // unambiguous alphabet (no 0/O/1/l/i), grouped for readability.
-    const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
-    const bytes = new Uint8Array(12);
-    crypto.getRandomValues(bytes);
-    let code = '';
-    for (let i = 0; i < bytes.length; i++) {
-      code += alphabet[bytes[i] % alphabet.length];
-      if (i % 4 === 3 && i !== bytes.length - 1) code += '-';
-    }
-    setRoom(code);
   }
 
   return (
@@ -86,89 +114,106 @@ export function JoinRoom() {
           </FieldShell>
         </Field>
 
-        <div className="mt-4 grid grid-cols-2 gap-1 rounded-lg bg-wa-input p-1 text-xs font-medium">
-          <button
-            type="button"
-            onClick={() => setTab('room')}
-            className={`rounded-md py-1.5 transition ${tab === 'room' ? 'bg-wa-green text-white' : 'text-wa-secondary hover:text-wa-primary'}`}
-          >
-            Join a room
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab('contacts')}
-            className={`rounded-md py-1.5 transition ${tab === 'contacts' ? 'bg-wa-green text-white' : 'text-wa-secondary hover:text-wa-primary'}`}
-          >
+        <div className="mt-4 grid grid-cols-3 gap-1 rounded-lg bg-wa-input p-1 text-xs font-medium">
+          <ModeTab active={mode === 'start'} onClick={() => selectMode('start')}>
+            Start new
+          </ModeTab>
+          <ModeTab active={mode === 'join'} onClick={() => selectMode('join')}>
+            Have a code
+          </ModeTab>
+          <ModeTab active={mode === 'contacts'} onClick={() => selectMode('contacts')}>
             Contacts
-          </button>
+          </ModeTab>
         </div>
 
-        {tab === 'contacts' ? (
+        {mode === 'contacts' ? (
           <div className="mt-4">
             <ContactsPanel myDisplayName={name} />
           </div>
         ) : (
-        <form onSubmit={onSubmit} className="mt-4 space-y-4" aria-busy={connecting} noValidate>
-          <Field label="Room code" htmlFor={roomId}>
-            <div className="flex gap-2">
-              <FieldShell icon={<Lock className="h-4 w-4" />}>
-                <input
-                  id={roomId}
-                  value={room}
-                  onChange={(e) => setRoom(e.target.value)}
-                  placeholder="e.g. garden-42"
-                  maxLength={128}
-                  autoComplete="off"
-                  autoCapitalize="off"
-                  spellCheck={false}
-                  disabled={connecting}
-                  aria-invalid={Boolean(errorText)}
-                  aria-describedby={errorText ? `${hintId} ${errorId}` : hintId}
-                  className="w-full bg-transparent font-mono text-sm tracking-wide text-wa-primary outline-none placeholder:font-sans placeholder:tracking-normal placeholder:text-wa-secondary disabled:opacity-60"
-                />
-              </FieldShell>
-              <button
-                type="button"
-                onClick={generateRoom}
-                disabled={connecting}
-                aria-label="Generate a random room code"
-                className="flex shrink-0 items-center gap-1 rounded-lg bg-wa-input px-3 text-xs font-medium text-wa-secondary ring-1 ring-transparent transition hover:text-wa-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-wa-green disabled:cursor-not-allowed disabled:opacity-50"
+          <form onSubmit={onSubmit} className="mt-4 space-y-4" aria-busy={connecting} noValidate>
+            <Field label="Invite code" htmlFor={roomId}>
+              <div className="flex gap-2">
+                <FieldShell icon={<Lock className="h-4 w-4" />}>
+                  <input
+                    id={roomId}
+                    value={room}
+                    onChange={(e) => {
+                      setRoom(e.target.value);
+                      setCopied(false);
+                    }}
+                    placeholder={mode === 'join' ? 'Paste the code you were sent' : 'e.g. garden-42'}
+                    maxLength={128}
+                    autoComplete="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    disabled={connecting}
+                    aria-invalid={Boolean(errorText)}
+                    aria-describedby={errorText ? `${hintId} ${errorId}` : hintId}
+                    className="w-full bg-transparent font-mono text-sm tracking-wide text-wa-primary outline-none placeholder:font-sans placeholder:tracking-normal placeholder:text-wa-secondary disabled:opacity-60"
+                  />
+                </FieldShell>
+                {mode === 'start' ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void copyCode()}
+                      disabled={connecting || !trimmedRoom}
+                      aria-label="Copy invite code"
+                      className="flex shrink-0 items-center gap-1 rounded-lg bg-wa-input px-3 text-xs font-medium text-wa-secondary ring-1 ring-transparent transition hover:text-wa-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-wa-green disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {copied ? <Check className="h-4 w-4 text-wa-green" /> : 'Copy'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={regenerate}
+                      disabled={connecting}
+                      aria-label="Generate a new invite code"
+                      className="flex shrink-0 items-center justify-center rounded-lg bg-wa-input px-3 text-xs font-medium text-wa-secondary ring-1 ring-transparent transition hover:text-wa-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-wa-green disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Refresh className="h-4 w-4" />
+                    </button>
+                  </>
+                ) : null}
+              </div>
+              <p id={hintId} className="mt-1.5 text-xs text-wa-secondary">
+                {mode === 'start'
+                  ? `Share this code with up to ${ROOM_MAX_PEERS - 1} people you trust — anyone who has it can join.`
+                  : 'Ask the person who invited you for their code, then enter it above.'}
+              </p>
+            </Field>
+
+            {errorText && (
+              <p
+                id={errorId}
+                role="alert"
+                className="flex items-start gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-300 ring-1 ring-red-500/20"
               >
-                <Plus className="h-4 w-4" /> New
-              </button>
-            </div>
-            <p id={hintId} className="mt-1.5 text-xs text-wa-secondary">
-              Share this code with up to {ROOM_MAX_PEERS - 1} others to talk privately.
-            </p>
-          </Field>
-
-          {errorText && (
-            <p
-              id={errorId}
-              role="alert"
-              className="flex items-start gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-300 ring-1 ring-red-500/20"
-            >
-              <Shield className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span>{errorText}</span>
-            </p>
-          )}
-
-          <button
-            type="submit"
-            disabled={!canJoin}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-wa-green py-2.5 text-sm font-semibold text-white shadow-lg shadow-wa-green/20 transition hover:bg-wa-green-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-wa-green focus-visible:ring-offset-2 focus-visible:ring-offset-wa-panel disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
-          >
-            {connecting ? (
-              <>
-                <Spinner /> Connecting&hellip;
-              </>
-            ) : (
-              <>
-                Join room <ArrowLeft className="h-4 w-4 rotate-180" aria-hidden="true" />
-              </>
+                <Shield className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span>{errorText}</span>
+              </p>
             )}
-          </button>
-        </form>
+
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-wa-green py-2.5 text-sm font-semibold text-white shadow-lg shadow-wa-green/20 transition hover:bg-wa-green-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-wa-green focus-visible:ring-offset-2 focus-visible:ring-offset-wa-panel disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
+            >
+              {connecting ? (
+                <>
+                  <Spinner /> Connecting&hellip;
+                </>
+              ) : mode === 'start' ? (
+                <>
+                  Start chat <Plus className="h-4 w-4" aria-hidden="true" />
+                </>
+              ) : (
+                <>
+                  Join chat <ArrowLeft className="h-4 w-4 rotate-180" aria-hidden="true" />
+                </>
+              )}
+            </button>
+          </form>
         )}
 
         <div className="mt-7 flex items-center justify-center gap-4 border-t border-wa-border pt-5 text-[11px] text-wa-secondary">
@@ -181,14 +226,14 @@ export function JoinRoom() {
 
         <div className="mt-4 text-center">
           {imported ? (
-            <p className="text-xs text-wa-green">Identity imported — join a room to use it.</p>
+            <p className="text-xs text-wa-green">Identity imported — join a chat to use it.</p>
           ) : (
             <button
               type="button"
               onClick={() => setImportOpen(true)}
               className="text-xs text-wa-secondary underline decoration-dotted transition hover:text-wa-primary"
             >
-              Already have an identity from another device?
+              Set up this device with an existing identity
             </button>
           )}
         </div>
@@ -237,6 +282,30 @@ function FieldShell({ icon, children }: { icon: ReactNode; children: ReactNode }
       </span>
       {children}
     </div>
+  );
+}
+
+/** One entry in the start/join/contacts segmented choice. */
+function ModeTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`rounded-md py-1.5 text-center transition ${
+        active ? 'bg-wa-green text-white' : 'text-wa-secondary hover:text-wa-primary'
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 
