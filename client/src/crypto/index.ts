@@ -114,7 +114,7 @@ export function safetyNumber(pubA: Uint8Array, pubB: Uint8Array): string {
   return out;
 }
 
-/* ---- base64 helpers (URL-safe, no padding via libsodium) ---- */
+/* ---- base64 helpers (standard alphabet, padded — libsodium ORIGINAL) ---- */
 
 export function toB64(bytes: Uint8Array): string {
   return s().to_base64(bytes, s().base64_variants.ORIGINAL);

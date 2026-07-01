@@ -29,7 +29,18 @@ export function JoinRoom() {
   }
 
   function generateRoom() {
-    setRoom(Math.random().toString(36).slice(2, 8));
+    // Room codes are the only thing gating access, so they must be hard to
+    // guess: use a CSPRNG (not Math.random) with ~59 bits of entropy over an
+    // unambiguous alphabet (no 0/O/1/l/i), grouped for readability.
+    const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
+    const bytes = new Uint8Array(12);
+    crypto.getRandomValues(bytes);
+    let code = '';
+    for (let i = 0; i < bytes.length; i++) {
+      code += alphabet[bytes[i] % alphabet.length];
+      if (i % 4 === 3 && i !== bytes.length - 1) code += '-';
+    }
+    setRoom(code);
   }
 
   return (

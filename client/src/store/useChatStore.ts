@@ -9,6 +9,8 @@ import type {
   PeerIdentity,
   ServerMessage,
   ChatPayload,
+  TextPayload,
+  TypingPayload,
 } from '@private-chat/shared';
 import {
   initCrypto,
@@ -19,6 +21,7 @@ import {
   fromB64,
   type Identity,
 } from '../crypto';
+import { pinAndCheck, isVerified, setVerified, repin } from '../crypto/trust';
 import { SignalingClient, signalingUrl } from '../signaling/client';
 import { CallMesh } from '../rtc/mesh';
 
@@ -44,7 +47,12 @@ interface ChatState {
   messages: ChatMessage[];
   typingPeers: Record<string, boolean>; // peerId -> currently typing
 
+  // --- Key verification (anti-MITM) state ---
+  verifiedPeers: Record<string, boolean>; // peerId -> user-verified safety number
+  keyAlerts: Record<string, boolean>; // peerId -> key changed vs. pinned (possible MITM)
+
   // --- Call (WebRTC mesh) state ---
+  incomingCall: { from: string } | null; // a peer is calling; awaiting accept/decline
   inCall: boolean;
   micEnabled: boolean;
   camEnabled: boolean;
@@ -56,8 +64,11 @@ interface ChatState {
   sendText: (text: string) => void;
   sendTyping: (isTyping: boolean) => void;
   leave: () => void;
+  verifyPeer: (peerId: string) => void;
 
   startCall: (withVideo: boolean) => Promise<void>;
+  acceptCall: () => Promise<void>;
+  declineCall: () => void;
   toggleMic: () => void;
   toggleCam: () => Promise<void>;
   endCall: () => void;
@@ -65,8 +76,6 @@ interface ChatState {
 
 let client: SignalingClient | null = null;
 let mesh: CallMesh | null = null;
-/** Guards against firing multiple auto-joins for simultaneous inbound offers. */
-let autoJoining = false;
 
 /** Auto-clear a peer's typing flag if no refresh arrives (in case 'false' is lost). */
 const TYPING_STALE_MS = 5000;
@@ -86,7 +95,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   peers: {},
   messages: [],
   typingPeers: {},
+  verifiedPeers: {},
+  keyAlerts: {},
 
+  incomingCall: null,
   inCall: false,
   micEnabled: false,
   camEnabled: false,
@@ -190,8 +202,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
       peers: {},
       messages: [],
       typingPeers: {},
+      verifiedPeers: {},
+      keyAlerts: {},
+      incomingCall: null,
       errorText: null,
     });
+  },
+
+  /** Mark a peer's key trusted after the user compared the safety number. */
+  verifyPeer: (peerId) => {
+    const { peers, roomId, keyAlerts } = get();
+    const peer = peers[peerId];
+    if (!peer || !roomId) return;
+    // If this was a changed/mismatched key, accept it as the new pin.
+    if (keyAlerts[peerId]) repin(roomId, peer.displayName, peer.publicKey);
+    setVerified(peer.publicKey, true);
+    set((st) => ({
+      verifiedPeers: { ...st.verifiedPeers, [peerId]: true },
+      keyAlerts: { ...st.keyAlerts, [peerId]: false },
+    }));
   },
 
   startCall: async (withVideo) => {
@@ -200,6 +229,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch (err) {
       set({ callError: mediaErrorText(err) });
     }
+  },
+
+  /** Accept a ringing incoming call: NOW acquire the mic and join the mesh. */
+  acceptCall: async () => {
+    if (!get().incomingCall) return;
+    set({ incomingCall: null });
+    try {
+      await enterCall(false, set, get);
+    } catch (err) {
+      set({ callError: mediaErrorText(err) });
+    }
+  },
+
+  /** Decline a ringing call: tear down the caller's connection, keep the mic off. */
+  declineCall: () => {
+    const ic = get().incomingCall;
+    if (!ic) return;
+    set({ incomingCall: null });
+    mesh?.hangup(ic.from);
   },
 
   toggleMic: () => {
@@ -273,8 +321,33 @@ function teardownCall(set: SetState): void {
     camEnabled: false,
     localStream: null,
     remoteStreams: {},
+    incomingCall: null,
     callError: null,
   });
+}
+
+/* ---- decrypted-payload validation (a peer could seal a malformed blob) ---- */
+
+const MAX_TEXT_LEN = 8192;
+
+function isTextPayload(p: unknown): p is TextPayload {
+  return (
+    typeof p === 'object' &&
+    p !== null &&
+    (p as { kind?: unknown }).kind === 'text' &&
+    typeof (p as { text?: unknown }).text === 'string' &&
+    (p as { text: string }).text.length <= MAX_TEXT_LEN &&
+    Number.isFinite((p as { sentAt?: unknown }).sentAt)
+  );
+}
+
+function isTypingPayload(p: unknown): p is TypingPayload {
+  return (
+    typeof p === 'object' &&
+    p !== null &&
+    (p as { kind?: unknown }).kind === 'typing' &&
+    typeof (p as { typing?: unknown }).typing === 'boolean'
+  );
 }
 
 /** Build a CallMesh whose signals/streams are bridged into the store. */
@@ -325,6 +398,20 @@ function clearTypingPeer(peerId: string, set: SetState): void {
   });
 }
 
+/**
+ * Record a peer's advertised key against the local TOFU pin and return the
+ * resulting trust flags. `alert` means the key differs from a previously pinned
+ * one for the same (room, name) — a possible server-side key swap / MITM.
+ */
+function ingestPeerKey(
+  roomId: string,
+  peer: PeerIdentity,
+): { verified: boolean; alert: boolean } {
+  const result = pinAndCheck(roomId, peer.displayName, peer.publicKey);
+  const alert = result === 'changed';
+  return { verified: !alert && isVerified(peer.publicKey), alert };
+}
+
 function mediaErrorText(err: unknown): string {
   if (err instanceof DOMException && err.name === 'NotAllowedError') {
     return 'Microphone/camera permission denied.';
@@ -343,8 +430,15 @@ function handleServerMessage(
   switch (msg.type) {
     case 'joined': {
       const peers: Record<string, PeerIdentity> = {};
-      for (const p of msg.peers) peers[p.peerId] = p;
-      set({ status: 'joined', roomId: msg.roomId, selfId: msg.selfId, peers });
+      const verifiedPeers: Record<string, boolean> = {};
+      const keyAlerts: Record<string, boolean> = {};
+      for (const p of msg.peers) {
+        peers[p.peerId] = p;
+        const trust = ingestPeerKey(msg.roomId, p);
+        verifiedPeers[p.peerId] = trust.verified;
+        keyAlerts[p.peerId] = trust.alert;
+      }
+      set({ status: 'joined', roomId: msg.roomId, selfId: msg.selfId, peers, verifiedPeers, keyAlerts });
       // Stand up the call mesh and hold idle connections to everyone already
       // here, so any later call (or inbound offer) negotiates instantly.
       mesh = createMesh(msg.selfId, set);
@@ -352,7 +446,12 @@ function handleServerMessage(
       break;
     }
     case 'peer-joined': {
-      set((st) => ({ peers: { ...st.peers, [msg.peer.peerId]: msg.peer } }));
+      const trust = ingestPeerKey(get().roomId ?? '', msg.peer);
+      set((st) => ({
+        peers: { ...st.peers, [msg.peer.peerId]: msg.peer },
+        verifiedPeers: { ...st.verifiedPeers, [msg.peer.peerId]: trust.verified },
+        keyAlerts: { ...st.keyAlerts, [msg.peer.peerId]: trust.alert },
+      }));
       mesh?.connect(msg.peer.peerId);
       break;
     }
@@ -364,7 +463,18 @@ function handleServerMessage(
         delete next[msg.peerId];
         const streams = { ...st.remoteStreams };
         delete streams[msg.peerId];
-        return { peers: next, remoteStreams: streams };
+        const verified = { ...st.verifiedPeers };
+        delete verified[msg.peerId];
+        const alerts = { ...st.keyAlerts };
+        delete alerts[msg.peerId];
+        return {
+          peers: next,
+          remoteStreams: streams,
+          verifiedPeers: verified,
+          keyAlerts: alerts,
+          // Dismiss a ringing prompt if the caller left.
+          incomingCall: st.incomingCall?.from === msg.peerId ? null : st.incomingCall,
+        };
       });
       break;
     }
@@ -378,12 +488,15 @@ function handleServerMessage(
           fromB64(sender.publicKey),
           identity.privateKey,
         );
-        const payload = JSON.parse(plain) as ChatPayload;
-        if (payload.kind === 'typing') {
+        const payload: unknown = JSON.parse(plain);
+        if (isTypingPayload(payload)) {
           setTypingPeer(msg.from, payload.typing, set);
           return;
         }
-        if (payload.kind !== 'text') return;
+        // Anything that isn't a well-formed text payload is dropped — a malicious
+        // peer must not be able to inject a non-string `text` (which would crash
+        // React rendering) or an oversized blob.
+        if (!isTextPayload(payload)) return;
         // A real message arrived — they've stopped typing.
         clearTypingPeer(msg.from, set);
         set((st) => ({
@@ -405,16 +518,17 @@ function handleServerMessage(
       break;
     }
     case 'signal': {
+      // A caller withdrawing dismisses any ringing prompt from them.
+      if (msg.signal.kind === 'bye' && get().incomingCall?.from === msg.from) {
+        set({ incomingCall: null });
+      }
       void mesh?.handleSignal(msg.from, msg.signal);
-      // An inbound offer while we're not in a call is an incoming call: join
-      // (acquire mic) so we can talk back, not just receive their audio/video.
-      if (msg.signal.kind === 'offer' && !get().inCall && !autoJoining) {
-        autoJoining = true;
-        void enterCall(false, set, get)
-          .catch((err) => set({ callError: mediaErrorText(err) }))
-          .finally(() => {
-            autoJoining = false;
-          });
+      // An inbound offer while we're not in a call is an INCOMING CALL. Do not
+      // silently acquire the microphone — that would let any room member turn
+      // on the victim's mic. Prompt instead; media is neither played (CallStage
+      // is gated on inCall) nor sent until the user explicitly accepts.
+      if (msg.signal.kind === 'offer' && !get().inCall) {
+        set((st) => (st.incomingCall ? {} : { incomingCall: { from: msg.from } }));
       }
       break;
     }

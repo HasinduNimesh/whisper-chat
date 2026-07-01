@@ -20,6 +20,12 @@ Environment=NODE_ENV=production
 Environment=PORT=8787
 # Keep the server private; only nginx (same box) reaches it.
 Environment=HOST=127.0.0.1
+# Restrict which browser Origins may open a WebSocket (blocks cross-site
+# WebSocket hijacking). Set to your deployed origin(s), comma-separated.
+Environment=ALLOWED_ORIGINS=https://chat.example.com
+# Abuse limits (override the built-in defaults if needed):
+# Environment=MAX_CONNS_PER_IP=30
+# Environment=MAX_ROOMS=10000
 Restart=always
 RestartSec=3
 User=www-data

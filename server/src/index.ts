@@ -10,6 +10,7 @@
  * sealed with XChaCha20-Poly1305 and are forwarded byte-for-byte.
  */
 import { randomUUID } from 'node:crypto';
+import type { IncomingMessage } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
   ClientMessage,
@@ -20,6 +21,7 @@ import {
   getRoom,
   joinRoom,
   leaveRoom,
+  roomCount,
   toIdentity,
   type Peer,
 } from './rooms.js';
@@ -30,7 +32,79 @@ const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST;
 const MAX_PAYLOAD = 256 * 1024; // 256 KiB cap per frame
 
-const wss = new WebSocketServer({ port: PORT, host: HOST, maxPayload: MAX_PAYLOAD });
+// --- Abuse limits (DoS hardening) ---------------------------------------
+// Comma-separated allow-list of browser Origins permitted to open a socket.
+// Unset = allow any origin (fine for LAN/dev; set this in production to block
+// cross-site WebSocket hijacking from other websites).
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+const MAX_CONNS_PER_IP = Number(process.env.MAX_CONNS_PER_IP ?? 30);
+const MAX_ROOMS = Number(process.env.MAX_ROOMS ?? 10_000);
+// Token-bucket message rate limit per socket: burst capacity + refill/sec.
+const MSG_BURST = Number(process.env.MSG_BURST ?? 60);
+const MSG_REFILL_PER_SEC = Number(process.env.MSG_REFILL_PER_SEC ?? 30);
+const HEARTBEAT_MS = 30_000;
+
+/** Live connection count per client IP, for the per-IP cap. */
+const connsPerIp = new Map<string, number>();
+
+/** Resolve the client IP, honoring X-Forwarded-For when behind a proxy. */
+function clientIp(req: IncomingMessage): string {
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.length > 0) return xff.split(',')[0].trim();
+  return req.socket.remoteAddress ?? 'unknown';
+}
+
+interface SocketState {
+  ip: string;
+  alive: boolean;
+  /** Token bucket for inbound-message rate limiting. */
+  tokens: number;
+  lastRefill: number;
+}
+
+const stateOf = new WeakMap<WebSocket, SocketState>();
+
+/** Consume one rate-limit token; false when the socket is over its budget. */
+function allowMessage(socket: WebSocket): boolean {
+  const st = stateOf.get(socket);
+  if (!st) return false;
+  const now = Date.now();
+  st.tokens = Math.min(MSG_BURST, st.tokens + ((now - st.lastRefill) / 1000) * MSG_REFILL_PER_SEC);
+  st.lastRefill = now;
+  if (st.tokens < 1) return false;
+  st.tokens -= 1;
+  return true;
+}
+
+/** Validate that a base64 string decodes to a 32-byte X25519 public key. */
+function isValidPublicKey(b64: string): boolean {
+  if (typeof b64 !== 'string' || b64.length === 0 || b64.length > 128) return false;
+  try {
+    const buf = Buffer.from(b64, 'base64');
+    // Reject non-canonical base64 (Buffer is lenient) by round-tripping.
+    return buf.length === 32 && buf.toString('base64') === b64;
+  } catch {
+    return false;
+  }
+}
+
+const wss = new WebSocketServer({
+  port: PORT,
+  host: HOST,
+  maxPayload: MAX_PAYLOAD,
+  verifyClient: ({ origin }, done) => {
+    // No Origin header => non-browser client (curl, native); allow it.
+    // Browser clients send Origin; enforce the allow-list when configured.
+    if (ALLOWED_ORIGINS.length === 0 || !origin || ALLOWED_ORIGINS.includes(origin)) {
+      done(true);
+      return;
+    }
+    done(false, 403, 'Forbidden origin');
+  },
+});
 
 /** Per-socket state: the peer record once joined. */
 const peerOf = new WeakMap<WebSocket, Peer>();
@@ -54,10 +128,19 @@ function handleJoin(socket: WebSocket, roomId: string, publicKey: string, displa
     fail(socket, 'invalid-room', 'Invalid room id');
     return;
   }
+  if (!isValidPublicKey(publicKey)) {
+    fail(socket, 'bad-request', 'Invalid public key');
+    return;
+  }
+  // Cap the number of distinct rooms to bound memory against room-flood DoS.
+  if (!getRoom(roomId) && roomCount() >= MAX_ROOMS) {
+    fail(socket, 'bad-request', 'Server is at capacity, try again later');
+    return;
+  }
   const peer: Peer = {
     id: randomUUID(),
     socket,
-    publicKey: String(publicKey).slice(0, 128),
+    publicKey,
     displayName: String(displayName ?? '').slice(0, 64) || 'Anonymous',
     roomId,
   };
@@ -119,8 +202,36 @@ function handleSignal(socket: WebSocket, msg: Extract<ClientMessage, { type: 'si
   send(target.socket, { type: 'signal', from: peer.id, signal: msg.signal });
 }
 
-wss.on('connection', (socket) => {
+wss.on('connection', (socket, req) => {
+  const ip = clientIp(req);
+  const open = connsPerIp.get(ip) ?? 0;
+  if (open >= MAX_CONNS_PER_IP) {
+    // Refuse before allocating any room/peer state.
+    fail(socket, 'bad-request', 'Too many connections');
+    socket.close(1008, 'Too many connections');
+    return;
+  }
+  connsPerIp.set(ip, open + 1);
+  stateOf.set(socket, { ip, alive: true, tokens: MSG_BURST, lastRefill: Date.now() });
+
+  const cleanup = (): void => {
+    handleLeave(socket);
+    const n = (connsPerIp.get(ip) ?? 1) - 1;
+    if (n <= 0) connsPerIp.delete(ip);
+    else connsPerIp.set(ip, n);
+  };
+
+  socket.on('pong', () => {
+    const st = stateOf.get(socket);
+    if (st) st.alive = true;
+  });
+
   socket.on('message', (data) => {
+    if (!allowMessage(socket)) {
+      // Over the rate budget — drop the frame and disconnect a flooding client.
+      socket.close(1008, 'Rate limit exceeded');
+      return;
+    }
     let msg: ClientMessage;
     try {
       msg = JSON.parse(data.toString());
@@ -141,8 +252,31 @@ wss.on('connection', (socket) => {
     }
   });
 
-  socket.on('close', () => handleLeave(socket));
-  socket.on('error', () => handleLeave(socket));
+  socket.on('close', cleanup);
+  socket.on('error', cleanup);
 });
 
+// Heartbeat: ping every socket; terminate any that missed the previous round.
+// Reaps half-open TCP connections that never send a clean close.
+const heartbeat = setInterval(() => {
+  for (const socket of wss.clients) {
+    const st = stateOf.get(socket);
+    if (st && !st.alive) {
+      socket.terminate();
+      continue;
+    }
+    if (st) st.alive = false;
+    try {
+      socket.ping();
+    } catch {
+      /* socket already gone */
+    }
+  }
+}, HEARTBEAT_MS);
+heartbeat.unref?.();
+wss.on('close', () => clearInterval(heartbeat));
+
 console.log(`[signaling] listening on ws://${HOST ?? '0.0.0.0'}:${PORT}`);
+if (ALLOWED_ORIGINS.length === 0) {
+  console.warn('[signaling] ALLOWED_ORIGINS unset — accepting any browser origin. Set it in production.');
+}

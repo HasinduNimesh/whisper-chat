@@ -29,6 +29,11 @@ export function getRoom(roomId: string): Room | undefined {
   return rooms.get(roomId);
 }
 
+/** Number of live rooms (used to bound memory against room-flood DoS). */
+export function roomCount(): number {
+  return rooms.size;
+}
+
 export type JoinResult =
   | { ok: true; room: Room }
   | { ok: false; reason: 'room-full' };

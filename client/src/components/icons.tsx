@@ -151,3 +151,29 @@ export const ArrowLeft = (p: IconProps) => (
     <path d="M19 12H5M11 6l-6 6 6 6" />
   </Base>
 );
+
+export const Menu = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 7h16M4 12h16M4 17h16" />
+  </Base>
+);
+
+export const ChevronDown = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M6 9l6 6 6-6" />
+  </Base>
+);
+
+export const ShieldAlert = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z" />
+    <path d="M12 8v4M12 15h.01" />
+  </Base>
+);
+
+export const ShieldCheck = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z" />
+    <path d="M9 12l2 2 4-4" />
+  </Base>
+);
