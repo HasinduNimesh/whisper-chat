@@ -47,6 +47,32 @@ const MSG_BURST = Number(process.env.MSG_BURST ?? 60);
 const MSG_REFILL_PER_SEC = Number(process.env.MSG_REFILL_PER_SEC ?? 30);
 const HEARTBEAT_MS = 30_000;
 
+// --- TURN credentials (Metered.ca) --------------------------------------
+// Mints short-lived TURN creds server-side so no long-lived secret ships in
+// the public client bundle. Unset => /turn-credentials returns no TURN
+// servers and calls fall back to STUN-only (fine on the same network, may
+// fail across strict NATs). Get a free API key + subdomain at metered.ca.
+const METERED_API_KEY = process.env.METERED_API_KEY;
+const METERED_DOMAIN = process.env.METERED_DOMAIN;
+const TURN_CACHE_MS = 60 * 60 * 1000; // re-mint at most once an hour
+let turnCache: { servers: unknown[]; expiresAt: number } | null = null;
+
+async function fetchTurnCredentials(): Promise<unknown[]> {
+  if (!METERED_API_KEY || !METERED_DOMAIN) return [];
+  if (turnCache && turnCache.expiresAt > Date.now()) return turnCache.servers;
+  try {
+    const res = await fetch(
+      `https://${METERED_DOMAIN}/api/v1/turn/credentials?apiKey=${encodeURIComponent(METERED_API_KEY)}`,
+    );
+    if (!res.ok) return [];
+    const servers = (await res.json()) as unknown[];
+    turnCache = { servers, expiresAt: Date.now() + TURN_CACHE_MS };
+    return servers;
+  } catch {
+    return [];
+  }
+}
+
 /** Live connection count per client IP, for the per-IP cap. */
 const connsPerIp = new Map<string, number>();
 
@@ -99,6 +125,26 @@ const httpServer = createServer((req, res) => {
   if (req.method === 'GET' && (req.url === '/' || req.url === '/healthz')) {
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('ok');
+    return;
+  }
+  if (req.method === 'GET' && req.url === '/turn-credentials') {
+    const origin = req.headers.origin;
+    const allowed =
+      ALLOWED_ORIGINS.length === 0 || (typeof origin === 'string' && ALLOWED_ORIGINS.includes(origin));
+    if (!allowed) {
+      res.writeHead(403).end();
+      return;
+    }
+    if (typeof origin === 'string') res.setHeader('Access-Control-Allow-Origin', origin);
+    fetchTurnCredentials()
+      .then((iceServers) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ iceServers }));
+      })
+      .catch(() => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ iceServers: [] }));
+      });
     return;
   }
   res.writeHead(404).end();

@@ -45,6 +45,10 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
       },
+      '/turn-credentials': {
+        target: SIGNALING_TARGET.replace(/^ws/, 'http'),
+        changeOrigin: true,
+      },
     },
   },
   test: {

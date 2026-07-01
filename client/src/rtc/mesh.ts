@@ -10,13 +10,14 @@
 import type { PeerId, RtcSignal } from '@private-chat/shared';
 
 /**
- * ICE servers: STUN for address discovery, plus optional TURN relay so calls
- * still connect when peers are behind strict NATs / carrier-grade firewalls
- * (where direct P2P fails). TURN is configured at build time via env:
- *   VITE_TURN_URLS=turn:host:3478,turns:host:5349
- *   VITE_TURN_USERNAME=...   VITE_TURN_CREDENTIAL=...
+ * ICE servers: STUN for address discovery, plus TURN relay so calls still
+ * connect when peers are behind strict NATs / carrier-grade firewalls (where
+ * direct P2P fails). TURN credentials are short-lived and minted by the
+ * backend (GET /turn-credentials, see server/src/index.ts) so no long-lived
+ * secret ships in the public client bundle. VITE_TURN_* build-time env vars
+ * remain as a static fallback for local testing when no backend is reachable.
  */
-function buildIceServers(): RTCIceServer[] {
+function staticIceServers(): RTCIceServer[] {
   const servers: RTCIceServer[] = [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
   ];
@@ -34,7 +35,30 @@ function buildIceServers(): RTCIceServer[] {
   return servers;
 }
 
-const ICE_SERVERS: RTCIceServer[] = buildIceServers();
+/** Origin of the signaling/relay backend, for the /turn-credentials fetch. */
+function backendHttpOrigin(): string {
+  const signaling = import.meta.env.VITE_SIGNALING_URL as string | undefined;
+  if (signaling) return new URL(signaling.replace(/^ws/, 'http')).origin;
+  return location.origin;
+}
+
+let iceServersPromise: Promise<RTCIceServer[]> | null = null;
+
+/** Fetch short-lived TURN creds from the backend once per page load, with a
+ * STUN(+static TURN)-only fallback if the backend is unreachable. */
+function getIceServers(): Promise<RTCIceServer[]> {
+  if (!iceServersPromise) {
+    iceServersPromise = fetch(`${backendHttpOrigin()}/turn-credentials`)
+      .then((res) => (res.ok ? (res.json() as Promise<{ iceServers?: RTCIceServer[] }>) : { iceServers: [] }))
+      .then(({ iceServers }) =>
+        iceServers && iceServers.length > 0
+          ? [staticIceServers()[0], ...iceServers]
+          : staticIceServers(),
+      )
+      .catch(() => staticIceServers());
+  }
+  return iceServersPromise;
+}
 
 export interface MeshCallbacks {
   /** Relay an RTC signal to one peer through the signaling server. */
@@ -69,10 +93,17 @@ export class CallMesh {
   private readonly conns = new Map<PeerId, PeerConn>();
   /** Local tracks to (re)attach to every peer connection, with their stream. */
   private localTracks: { track: MediaStreamTrack; stream: MediaStream }[] = [];
+  /** Best ICE servers known so far; upgraded once the TURN fetch resolves. */
+  private iceServers: RTCIceServer[] = staticIceServers();
 
   constructor(selfId: PeerId, cb: MeshCallbacks) {
     this.selfId = selfId;
     this.cb = cb;
+    // Kick off the TURN credential fetch immediately (well before any call
+    // starts) so `ensure()` below can stay synchronous.
+    getIceServers().then((servers) => {
+      this.iceServers = servers;
+    });
   }
 
   /** Open (or reuse) a connection to a peer and attach current local media. */
@@ -164,7 +195,7 @@ export class CallMesh {
     const existing = this.conns.get(peerId);
     if (existing) return existing;
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
     const conn: PeerConn = {
       pc,
       remoteStream: new MediaStream(),
