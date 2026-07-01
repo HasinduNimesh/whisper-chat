@@ -17,10 +17,12 @@ services:
       # e.g. https://whisper-chat.vercel.app,https://whisper-chat-git-main-you.vercel.app
       - key: ALLOWED_ORIGINS
         sync: false
-      # Free Metered.ca account -> API key + subdomain (yourapp.metered.live).
-      # Mints short-lived TURN creds server-side, delivered to clients over the
-      # authenticated WS session (never a public HTTP route) so calls work
-      # across strict NATs. Leave unset to fall back to STUN-only.
+      # Free Metered.ca account -> Dashboard -> TURN Server -> Add Credential,
+      # then "Show API Key" on it for METERED_API_KEY (a credential-scoped
+      # key, not the account secretKey). METERED_DOMAIN is your subdomain
+      # (yourapp.metered.live). Delivered to clients over the authenticated
+      # WS session (never a public HTTP route) so calls work across strict
+      # NATs. Leave unset to fall back to STUN-only.
       - key: METERED_API_KEY
         sync: false
       - key: METERED_DOMAIN

@@ -55,32 +55,17 @@ const HEARTBEAT_MS = 30_000;
 // Unset => no TURN servers; calls fall back to STUN-only (fine on the same
 // network, may fail across strict NATs). Get a free account at metered.ca.
 //
-// Metered has two relevant key types (see Dashboard -> Developers):
-//   secretKey — account-scoped, server-side only. Used to MINT a
-//               short-lived TURN credential (POST .../turn/credential).
-//   apiKey    — returned per-credential; only good for fetching that one
-//               credential's ICE array back. We don't need it: we already
-//               know Metered's Global Endpoint URLs, so we build the ICE
-//               servers array ourselves from the minted username/password.
-// METERED_API_KEY below holds the account's secretKey.
+// METERED_API_KEY holds a credential-scoped `apiKey` (create one via
+// Dashboard -> TURN Server -> Add Credential, then "Show API Key" on it).
+// That's distinct from the account's `secretKey` (Dashboard -> Developers) —
+// the secretKey mints new credentials but this simpler flow just reads back
+// the ICE servers array for a credential that already exists.
 const METERED_API_KEY = process.env.METERED_API_KEY;
 const METERED_DOMAIN = process.env.METERED_DOMAIN;
-const TURN_CRED_TTL_SEC = 2 * 60 * 60; // ask Metered to auto-expire in 2h
-const TURN_CACHE_MS = 60 * 60 * 1000; // re-mint at most once an hour
+const TURN_CACHE_MS = 60 * 60 * 1000; // re-fetch at most once an hour
 let turnCache: { servers: IceServerLike[]; expiresAt: number } | null = null;
 // Single-flight guard: coalesce concurrent cache-miss callers into one fetch.
 let turnFetchInFlight: Promise<IceServerLike[]> | null = null;
-
-/** Metered's Global Endpoint (see docs) — geo-routes to the nearest edge. */
-function meteredIceServers(username: string, credential: string): IceServerLike[] {
-  return [
-    { urls: 'stun:stun.relay.metered.ca:80' },
-    { urls: 'turn:global.relay.metered.ca:80', username, credential },
-    { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username, credential },
-    { urls: 'turn:global.relay.metered.ca:443', username, credential },
-    { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username, credential },
-  ];
-}
 
 async function fetchTurnCredentials(): Promise<IceServerLike[]> {
   if (!METERED_API_KEY || !METERED_DOMAIN) return [];
@@ -89,23 +74,18 @@ async function fetchTurnCredentials(): Promise<IceServerLike[]> {
   turnFetchInFlight = (async () => {
     try {
       const res = await fetch(
-        `https://${METERED_DOMAIN}/api/v1/turn/credential?secretKey=${encodeURIComponent(METERED_API_KEY)}`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ expiryInSeconds: TURN_CRED_TTL_SEC, label: 'whisper-signaling' }),
-        },
+        `https://${METERED_DOMAIN}/api/v1/turn/credentials?apiKey=${encodeURIComponent(METERED_API_KEY)}`,
       );
       if (!res.ok) {
-        console.error(`[turn] Metered credential request failed: ${res.status} ${res.statusText}`);
+        const body = await res.text().catch(() => '');
+        console.error(`[turn] Metered request failed: ${res.status} ${res.statusText} ${body}`);
         return [];
       }
-      const cred = (await res.json()) as { username?: string; password?: string };
-      if (!cred.username || !cred.password) {
-        console.error('[turn] Metered returned no username/password', cred);
+      const servers = (await res.json()) as IceServerLike[];
+      if (!Array.isArray(servers) || servers.length === 0) {
+        console.error('[turn] Metered returned no ICE servers', servers);
         return [];
       }
-      const servers = meteredIceServers(cred.username, cred.password);
       turnCache = { servers, expiresAt: Date.now() + TURN_CACHE_MS };
       return servers;
     } catch (err) {
