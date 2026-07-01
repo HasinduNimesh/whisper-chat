@@ -72,6 +72,8 @@ interface ChatState {
   inCall: boolean;
   micEnabled: boolean;
   camEnabled: boolean;
+  /** Which physical camera is active — mainly meaningful on phones (front/back). */
+  cameraFacing: 'user' | 'environment';
   localStream: MediaStream | null;
   remoteStreams: Record<string, MediaStream>; // peerId -> their media
   callError: string | null;
@@ -90,6 +92,7 @@ interface ChatState {
   declineCall: () => void;
   toggleMic: () => void;
   toggleCam: () => Promise<void>;
+  switchCamera: () => Promise<void>;
   endCall: () => void;
   dismissCallError: () => void;
 }
@@ -132,6 +135,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   inCall: false,
   micEnabled: false,
   camEnabled: false,
+  cameraFacing: 'user',
   localStream: null,
   remoteStreams: {},
   callError: null,
@@ -364,6 +368,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  /**
+   * Swap front/back camera mid-call. Uses replaceTrack (via CallMesh) rather
+   * than remove+add, so it doesn't trigger a renegotiation round-trip with
+   * every peer — just a clean, instant track swap on the existing senders.
+   */
+  switchCamera: async () => {
+    const { localStream, camEnabled, cameraFacing } = get();
+    if (!localStream || !mesh || !camEnabled) return;
+    const oldTrack = localStream.getVideoTracks()[0];
+    if (!oldTrack) return;
+    const nextFacing = cameraFacing === 'user' ? 'environment' : 'user';
+    try {
+      // `ideal` (not `exact`) so this degrades gracefully to "same camera
+      // again" on a single-camera device instead of throwing.
+      const cam = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: nextFacing } },
+      });
+      const newTrack = cam.getVideoTracks()[0];
+      mesh.replaceLocalTrack(oldTrack, newTrack);
+      localStream.removeTrack(oldTrack);
+      oldTrack.stop();
+      localStream.addTrack(newTrack);
+      set({ cameraFacing: nextFacing, callError: null });
+    } catch (err) {
+      set({ callError: mediaErrorText(err) });
+    }
+  },
+
   endCall: () => {
     mesh?.close();
     teardownCall(set);
@@ -446,6 +478,7 @@ function teardownCall(set: SetState): void {
     inCall: false,
     micEnabled: false,
     camEnabled: false,
+    cameraFacing: 'user',
     localStream: null,
     remoteStreams: {},
     incomingCall: null,

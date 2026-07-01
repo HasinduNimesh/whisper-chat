@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useChatStore, type RosterEntry } from '../store/useChatStore';
 import { VIDEO_CALL_MAX_PEERS, type PeerId } from '@private-chat/shared';
 import { Avatar } from './Avatar';
-import { Mic, MicOff, Video, VideoOff, PhoneOff, Minimize } from './icons';
+import { Mic, MicOff, Video, VideoOff, PhoneOff, Minimize, FlipCamera } from './icons';
 
 /** remoteStreams is keyed by the live, ephemeral PeerId; the roster is keyed
  * by permanent public key — resolve a display name by matching peerId. */
@@ -32,6 +32,7 @@ export function CallStage({ elapsed, onMinimize }: CallStageProps) {
   const callError = useChatStore((s) => s.callError);
   const toggleMic = useChatStore((s) => s.toggleMic);
   const toggleCam = useChatStore((s) => s.toggleCam);
+  const switchCamera = useChatStore((s) => s.switchCamera);
   const endCall = useChatStore((s) => s.endCall);
 
   if (!inCall) return null;
@@ -122,6 +123,11 @@ export function CallStage({ elapsed, onMinimize }: CallStageProps) {
         >
           {camEnabled ? <Video className="h-6 w-6" /> : <VideoOff className="h-6 w-6" />}
         </ControlButton>
+        {camEnabled && (
+          <ControlButton onClick={() => void switchCamera()} title="Switch camera">
+            <FlipCamera className="h-6 w-6" />
+          </ControlButton>
+        )}
         <button
           onClick={endCall}
           title="Leave call"

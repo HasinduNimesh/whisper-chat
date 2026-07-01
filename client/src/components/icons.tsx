@@ -196,3 +196,13 @@ export const BookOpen = (p: IconProps) => (
     <path d="M12 6.5V19" />
   </Base>
 );
+
+/** Switch camera (front/back) — a rounded pair of arrows around a camera body. */
+export const FlipCamera = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="3" y="7" width="18" height="13" rx="2" />
+    <path d="M8 7l1.5-2h5L16 7" />
+    <path d="M9 14a3 3 0 0 1 5.2-2M15 11.5V14h-2.5" />
+    <path d="M15 14a3 3 0 0 1-5.2 2M9 16.5V14h2.5" />
+  </Base>
+);

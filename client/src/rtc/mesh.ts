@@ -109,6 +109,25 @@ export class CallMesh {
     }
   }
 
+  /**
+   * Swap a currently-sending track for a different one (e.g. switching
+   * front/back camera) via RTCRtpSender.replaceTrack — every peer keeps the
+   * same sender/transceiver, so this needs no renegotiation and can't race
+   * with an in-flight offer/answer the way remove+add would.
+   */
+  replaceLocalTrack(oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack): void {
+    const entry = this.localTracks.find((t) => t.track === oldTrack);
+    if (entry) {
+      entry.track = newTrack;
+    } else {
+      this.localTracks.push({ track: newTrack, stream: new MediaStream([newTrack]) });
+    }
+    for (const { pc } of this.conns.values()) {
+      const sender = pc.getSenders().find((s) => s.track === oldTrack);
+      if (sender) void sender.replaceTrack(newTrack);
+    }
+  }
+
   /** Process an inbound RTC signal relayed from `from`. */
   async handleSignal(from: PeerId, signal: RtcSignal): Promise<void> {
     if (signal.kind === 'bye') {
