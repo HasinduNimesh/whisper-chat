@@ -7,20 +7,23 @@
  * #perfect-negotiation-example): in every pair exactly one peer is "polite", so
  * simultaneous offers (glare) resolve deterministically without a deadlock.
  */
-import type { PeerId, RtcSignal } from '@private-chat/shared';
+import type { IceServerLike, PeerId, RtcSignal } from '@private-chat/shared';
+
+const STUN_SERVER: RTCIceServer = {
+  urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'],
+};
 
 /**
  * ICE servers: STUN for address discovery, plus TURN relay so calls still
  * connect when peers are behind strict NATs / carrier-grade firewalls (where
- * direct P2P fails). TURN credentials are short-lived and minted by the
- * backend (GET /turn-credentials, see server/src/index.ts) so no long-lived
- * secret ships in the public client bundle. VITE_TURN_* build-time env vars
- * remain as a static fallback for local testing when no backend is reachable.
+ * direct P2P fails). TURN credentials are short-lived, minted server-side,
+ * and delivered over the authenticated WS session in the 'joined' message
+ * (see server/src/index.ts) — never a public HTTP route, and never baked
+ * into the client bundle. VITE_TURN_* build-time env vars remain as a static
+ * fallback for local testing when the backend has none configured.
  */
 function staticIceServers(): RTCIceServer[] {
-  const servers: RTCIceServer[] = [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
-  ];
+  const servers: RTCIceServer[] = [STUN_SERVER];
   const turnUrls = (import.meta.env.VITE_TURN_URLS as string | undefined)
     ?.split(',')
     .map((u) => u.trim())
@@ -35,29 +38,11 @@ function staticIceServers(): RTCIceServer[] {
   return servers;
 }
 
-/** Origin of the signaling/relay backend, for the /turn-credentials fetch. */
-function backendHttpOrigin(): string {
-  const signaling = import.meta.env.VITE_SIGNALING_URL as string | undefined;
-  if (signaling) return new URL(signaling.replace(/^ws/, 'http')).origin;
-  return location.origin;
-}
-
-let iceServersPromise: Promise<RTCIceServer[]> | null = null;
-
-/** Fetch short-lived TURN creds from the backend once per page load, with a
- * STUN(+static TURN)-only fallback if the backend is unreachable. */
-function getIceServers(): Promise<RTCIceServer[]> {
-  if (!iceServersPromise) {
-    iceServersPromise = fetch(`${backendHttpOrigin()}/turn-credentials`)
-      .then((res) => (res.ok ? (res.json() as Promise<{ iceServers?: RTCIceServer[] }>) : { iceServers: [] }))
-      .then(({ iceServers }) =>
-        iceServers && iceServers.length > 0
-          ? [staticIceServers()[0], ...iceServers]
-          : staticIceServers(),
-      )
-      .catch(() => staticIceServers());
-  }
-  return iceServersPromise;
+/** Combine the fixed STUN server with TURN servers handed down by the server
+ * at join time. Falls back to the static (build-time) list when the server
+ * has no TURN configured. */
+function buildIceServers(fromServer: IceServerLike[]): RTCIceServer[] {
+  return fromServer.length > 0 ? [STUN_SERVER, ...fromServer] : staticIceServers();
 }
 
 export interface MeshCallbacks {
@@ -93,17 +78,12 @@ export class CallMesh {
   private readonly conns = new Map<PeerId, PeerConn>();
   /** Local tracks to (re)attach to every peer connection, with their stream. */
   private localTracks: { track: MediaStreamTrack; stream: MediaStream }[] = [];
-  /** Best ICE servers known so far; upgraded once the TURN fetch resolves. */
-  private iceServers: RTCIceServer[] = staticIceServers();
+  private readonly iceServers: RTCIceServer[];
 
-  constructor(selfId: PeerId, cb: MeshCallbacks) {
+  constructor(selfId: PeerId, iceServers: IceServerLike[], cb: MeshCallbacks) {
     this.selfId = selfId;
     this.cb = cb;
-    // Kick off the TURN credential fetch immediately (well before any call
-    // starts) so `ensure()` below can stay synchronous.
-    getIceServers().then((servers) => {
-      this.iceServers = servers;
-    });
+    this.iceServers = buildIceServers(iceServers);
   }
 
   /** Open (or reuse) a connection to a peer and attach current local media. */
@@ -231,9 +211,14 @@ export class CallMesh {
     };
 
     pc.onconnectionstatechange = () => {
+      console.log(`[rtc] ${peerId} connectionState -> ${pc.connectionState}`);
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         this.drop(peerId);
       }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[rtc] ${peerId} iceConnectionState -> ${pc.iceConnectionState}`);
     };
 
     // Attach whatever local media we already have; this fires onnegotiationneeded.

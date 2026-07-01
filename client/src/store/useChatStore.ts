@@ -11,6 +11,7 @@ import type {
   ChatPayload,
   TextPayload,
   TypingPayload,
+  IceServerLike,
 } from '@private-chat/shared';
 import {
   initCrypto,
@@ -351,8 +352,8 @@ function isTypingPayload(p: unknown): p is TypingPayload {
 }
 
 /** Build a CallMesh whose signals/streams are bridged into the store. */
-function createMesh(selfId: PeerId, set: SetState): CallMesh {
-  return new CallMesh(selfId, {
+function createMesh(selfId: PeerId, iceServers: IceServerLike[], set: SetState): CallMesh {
+  return new CallMesh(selfId, iceServers, {
     sendSignal: (to, signal) => client?.send({ type: 'signal', to, signal }),
     onRemoteStream: (peerId, stream) =>
       set((st) => ({ remoteStreams: { ...st.remoteStreams, [peerId]: stream } })),
@@ -441,7 +442,7 @@ function handleServerMessage(
       set({ status: 'joined', roomId: msg.roomId, selfId: msg.selfId, peers, verifiedPeers, keyAlerts });
       // Stand up the call mesh and hold idle connections to everyone already
       // here, so any later call (or inbound offer) negotiates instantly.
-      mesh = createMesh(msg.selfId, set);
+      mesh = createMesh(msg.selfId, msg.iceServers, set);
       for (const peerId of Object.keys(peers)) mesh.connect(peerId);
       break;
     }

@@ -81,6 +81,19 @@ export interface JoinedMessage {
   roomId: string;
   /** Existing peers already in the room. */
   peers: PeerIdentity[];
+  /**
+   * Extra ICE servers (TURN) to use alongside the client's built-in STUN
+   * list, minted server-side so no long-lived secret is ever public. Sent
+   * only over this authenticated WS connection — never a public HTTP route.
+   */
+  iceServers: IceServerLike[];
+}
+
+/** Structural copy of RTCIceServer (avoids pulling the DOM lib into the server). */
+export interface IceServerLike {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
 }
 
 export interface PeerJoinedMessage {
