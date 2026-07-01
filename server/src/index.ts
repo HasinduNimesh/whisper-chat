@@ -38,7 +38,7 @@ const MAX_PAYLOAD = 256 * 1024; // 256 KiB cap per frame
 // cross-site WebSocket hijacking from other websites).
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? '')
   .split(',')
-  .map((o) => o.trim())
+  .map((o) => o.trim().replace(/\/+$/, ''))
   .filter(Boolean);
 const MAX_CONNS_PER_IP = Number(process.env.MAX_CONNS_PER_IP ?? 30);
 const MAX_ROOMS = Number(process.env.MAX_ROOMS ?? 10_000);
