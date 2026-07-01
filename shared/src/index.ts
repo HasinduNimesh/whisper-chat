@@ -44,15 +44,27 @@ export interface LeaveRoomMessage {
   type: 'leave';
 }
 
-/** An encrypted chat payload to be relayed to one or all peers. */
+/**
+ * An encrypted chat payload relayed to one recipient, addressed by their
+ * permanent public key rather than an ephemeral per-session PeerId — a
+ * recipient's PeerId only exists while they're connected, but a message must
+ * still be addressable (and persistable) when they're offline.
+ */
 export interface RelayMessage {
   type: 'relay';
-  /** Target peer, or 'all' to fan out to every other peer in the room. */
-  to: PeerId | 'all';
-  /** Opaque base64 ciphertext (XChaCha20-Poly1305). Server never decrypts. */
+  /** Recipient's base64 X25519 public key. */
+  to: string;
+  /** Opaque base64 ciphertext (XSalsa20-Poly1305 sealed box). Server never decrypts. */
   ciphertext: string;
   /** base64 nonce for the AEAD. */
   nonce: string;
+  /**
+   * Store this server-side so the recipient can fetch it later (offline
+   * delivery / cross-device history). Set for real messages; omitted/false
+   * for ephemeral signals like typing indicators, which the server otherwise
+   * can't distinguish from real content (both are opaque ciphertext to it).
+   */
+  persist?: boolean;
 }
 
 /** WebRTC signaling (SDP offer/answer or ICE candidate) targeted at a peer. */
@@ -79,14 +91,42 @@ export interface JoinedMessage {
   type: 'joined';
   selfId: PeerId;
   roomId: string;
-  /** Existing peers already in the room. */
-  peers: PeerIdentity[];
+  /**
+   * Every public key ever seen in this room (excluding self), each flagged
+   * with whether they're currently connected. Includes members who are
+   * offline right now, so the client can still address (and the server can
+   * persist) a message to them.
+   */
+  members: RoomMember[];
   /**
    * Extra ICE servers (TURN) to use alongside the client's built-in STUN
    * list, minted server-side so no long-lived secret is ever public. Sent
    * only over this authenticated WS connection — never a public HTTP route.
    */
   iceServers: IceServerLike[];
+  /** Decryptable history addressed to our own public key, oldest first. */
+  history: HistoryEntry[];
+}
+
+/** A room's durable member record — may or may not be currently connected. */
+export interface RoomMember {
+  /** base64 X25519 public key — the durable identity, unlike PeerId. */
+  publicKey: string;
+  displayName: string;
+  online: boolean;
+  /** Their current live PeerId, only present when `online` (for call signaling). */
+  peerId?: PeerId;
+}
+
+/** A stored message addressed to us, to be decrypted and replayed on join. */
+export interface HistoryEntry {
+  /** Sender's base64 X25519 public key. */
+  fromPublicKey: string;
+  /** Sender's displayName as it was at send time (may no longer be online). */
+  fromDisplayName: string;
+  ciphertext: string;
+  nonce: string;
+  sentAt: number;
 }
 
 /** Structural copy of RTCIceServer (avoids pulling the DOM lib into the server). */
@@ -109,7 +149,8 @@ export interface PeerLeftMessage {
 /** A relayed encrypted chat payload delivered from another peer. */
 export interface DeliverMessage {
   type: 'deliver';
-  from: PeerId;
+  /** Sender's base64 X25519 public key (the stable identity, not a PeerId). */
+  from: string;
   ciphertext: string;
   nonce: string;
 }

@@ -6,7 +6,6 @@
 import { create } from 'zustand';
 import type {
   PeerId,
-  PeerIdentity,
   ServerMessage,
   ChatPayload,
   TextPayload,
@@ -38,6 +37,20 @@ export interface ChatMessage {
   sentAt: number;
 }
 
+/**
+ * A room member, keyed by their permanent public key (not the ephemeral,
+ * per-session PeerId a live connection gets). `online`/`peerId` reflect
+ * whether they're currently connected — a message can still be addressed
+ * (and will be persisted server-side) to an offline member.
+ */
+export interface RosterEntry {
+  publicKey: string;
+  displayName: string;
+  online: boolean;
+  /** Only set while `online` — needed for WebRTC call signaling. */
+  peerId?: PeerId;
+}
+
 interface ChatState {
   status: ConnectionStatus;
   errorText: string | null;
@@ -45,7 +58,7 @@ interface ChatState {
   selfId: string | null;
   displayName: string;
   identity: Identity | null;
-  peers: Record<string, PeerIdentity>; // peerId -> identity
+  peers: Record<string, RosterEntry>; // publicKey -> roster entry
   messages: ChatMessage[];
   typingPeers: Record<string, boolean>; // peerId -> currently typing
 
@@ -66,7 +79,7 @@ interface ChatState {
   sendText: (text: string) => void;
   sendTyping: (isTyping: boolean) => void;
   leave: () => void;
-  verifyPeer: (peerId: string) => void;
+  verifyPeer: (publicKey: string) => void;
 
   startCall: (withVideo: boolean) => Promise<void>;
   acceptCall: () => Promise<void>;
@@ -153,16 +166,32 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const payload: ChatPayload = { kind: 'text', text: trimmed, sentAt: Date.now() };
     const serialized = JSON.stringify(payload);
 
-    // Encrypt and relay separately to each peer (per-recipient sealed box).
+    // Encrypt and relay separately to every known member — online or not,
+    // addressed by their permanent public key (peers state is never keyed
+    // by the ephemeral PeerId). The server live-delivers if they're
+    // connected and always persists, so this is what makes offline
+    // delivery and history work.
     for (const peer of Object.values(peers)) {
       const sealed = sealTo(serialized, fromB64(peer.publicKey), identity.privateKey);
       client.send({
         type: 'relay',
-        to: peer.peerId,
+        to: peer.publicKey,
         ciphertext: sealed.ciphertext,
         nonce: sealed.nonce,
+        persist: true,
       });
     }
+    // Also seal a copy to ourselves, purely so this message is persisted and
+    // recoverable later (reload, or another device sharing this identity).
+    // The server never live-delivers a self-addressed message back to us.
+    const selfSealed = sealTo(serialized, identity.publicKey, identity.privateKey);
+    client.send({
+      type: 'relay',
+      to: toB64(identity.publicKey),
+      ciphertext: selfSealed.ciphertext,
+      nonce: selfSealed.nonce,
+      persist: true,
+    });
 
     // Echo into our own log immediately.
     set((st) => ({
@@ -170,7 +199,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...st.messages,
         {
           id: crypto.randomUUID(),
-          fromPeerId: selfId,
+          fromPeerId: toB64(identity.publicKey),
           fromName: displayName,
           mine: true,
           text: trimmed,
@@ -187,12 +216,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const payload: ChatPayload = { kind: 'typing', typing: isTyping, sentAt: Date.now() };
     const serialized = JSON.stringify(payload);
 
-    // Sealed per-recipient just like a message — the server only sees ciphertext.
-    for (const peer of Object.values(peers)) {
+    // Only online members can usefully receive a live typing indicator; no
+    // point sealing/sending it to someone who isn't connected, and it's
+    // explicitly not persisted (ephemeral, unlike a real message).
+    for (const peer of Object.values(peers).filter((p) => p.online)) {
       const sealed = sealTo(serialized, fromB64(peer.publicKey), identity.privateKey);
       client.send({
         type: 'relay',
-        to: peer.peerId,
+        to: peer.publicKey,
         ciphertext: sealed.ciphertext,
         nonce: sealed.nonce,
       });
@@ -222,16 +253,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   /** Mark a peer's key trusted after the user compared the safety number. */
-  verifyPeer: (peerId) => {
+  verifyPeer: (publicKey) => {
     const { peers, roomId, keyAlerts } = get();
-    const peer = peers[peerId];
+    const peer = peers[publicKey];
     if (!peer || !roomId) return;
     // If this was a changed/mismatched key, accept it as the new pin.
-    if (keyAlerts[peerId]) repin(roomId, peer.displayName, peer.publicKey);
+    if (keyAlerts[publicKey]) repin(roomId, peer.displayName, peer.publicKey);
     setVerified(peer.publicKey, true);
     set((st) => ({
-      verifiedPeers: { ...st.verifiedPeers, [peerId]: true },
-      keyAlerts: { ...st.keyAlerts, [peerId]: false },
+      verifiedPeers: { ...st.verifiedPeers, [publicKey]: true },
+      keyAlerts: { ...st.keyAlerts, [publicKey]: false },
     }));
   },
 
@@ -335,9 +366,10 @@ async function enterCall(
     callError: null,
   });
   for (const track of stream.getTracks()) mesh.addLocalTrack(track, stream);
-  // We already hold idle connections to every peer; adding tracks renegotiates.
-  for (const peerId of Object.keys(peers)) {
-    if (peerId !== deferPeer) mesh.connect(peerId);
+  // We already hold idle connections to every ONLINE peer; adding tracks
+  // renegotiates. Offline members have no live PeerId to connect to at all.
+  for (const peer of Object.values(peers)) {
+    if (peer.online && peer.peerId && peer.peerId !== deferPeer) mesh.connect(peer.peerId);
   }
 }
 
@@ -435,7 +467,7 @@ function clearTypingPeer(peerId: string, set: SetState): void {
  */
 function ingestPeerKey(
   roomId: string,
-  peer: PeerIdentity,
+  peer: { publicKey: string; displayName: string },
 ): { verified: boolean; alert: boolean } {
   const result = pinAndCheck(roomId, peer.displayName, peer.publicKey);
   const alert = result === 'changed';
@@ -459,49 +491,90 @@ function handleServerMessage(
 ): void {
   switch (msg.type) {
     case 'joined': {
-      const peers: Record<string, PeerIdentity> = {};
+      const peers: Record<string, RosterEntry> = {};
       const verifiedPeers: Record<string, boolean> = {};
       const keyAlerts: Record<string, boolean> = {};
-      for (const p of msg.peers) {
-        peers[p.peerId] = p;
-        const trust = ingestPeerKey(msg.roomId, p);
-        verifiedPeers[p.peerId] = trust.verified;
-        keyAlerts[p.peerId] = trust.alert;
+      for (const m of msg.members) {
+        peers[m.publicKey] = { publicKey: m.publicKey, displayName: m.displayName, online: m.online, peerId: m.peerId };
+        const trust = ingestPeerKey(msg.roomId, m);
+        verifiedPeers[m.publicKey] = trust.verified;
+        keyAlerts[m.publicKey] = trust.alert;
       }
-      set({ status: 'joined', roomId: msg.roomId, selfId: msg.selfId, peers, verifiedPeers, keyAlerts });
+
+      // Decrypt any history addressed to us (offline messages + our own past
+      // sends), oldest first, and seed the message log with it.
+      const identity = get().identity;
+      const selfPublicKey = identity ? toB64(identity.publicKey) : '';
+      const messages: ChatMessage[] = [];
+      if (identity) {
+        for (const entry of msg.history) {
+          try {
+            const plain = openFrom(
+              { ciphertext: entry.ciphertext, nonce: entry.nonce },
+              fromB64(entry.fromPublicKey),
+              identity.privateKey,
+            );
+            const payload: unknown = JSON.parse(plain);
+            if (!isTextPayload(payload)) continue;
+            messages.push({
+              id: crypto.randomUUID(),
+              fromPeerId: entry.fromPublicKey,
+              fromName: entry.fromDisplayName,
+              mine: entry.fromPublicKey === selfPublicKey,
+              text: payload.text,
+              sentAt: payload.sentAt,
+            });
+          } catch {
+            // Tampered/undecryptable — drop silently, same as a live message.
+          }
+        }
+        messages.sort((a, b) => a.sentAt - b.sentAt);
+      }
+
+      set({ status: 'joined', roomId: msg.roomId, selfId: msg.selfId, peers, verifiedPeers, keyAlerts, messages });
       // Stand up the call mesh and hold idle connections to everyone already
-      // here, so any later call (or inbound offer) negotiates instantly.
+      // online, so any later call (or inbound offer) negotiates instantly.
       mesh = createMesh(msg.selfId, msg.iceServers, set);
-      for (const peerId of Object.keys(peers)) mesh.connect(peerId);
+      for (const peer of Object.values(peers)) {
+        if (peer.online && peer.peerId) mesh.connect(peer.peerId);
+      }
       break;
     }
     case 'peer-joined': {
       const trust = ingestPeerKey(get().roomId ?? '', msg.peer);
       set((st) => ({
-        peers: { ...st.peers, [msg.peer.peerId]: msg.peer },
-        verifiedPeers: { ...st.verifiedPeers, [msg.peer.peerId]: trust.verified },
-        keyAlerts: { ...st.keyAlerts, [msg.peer.peerId]: trust.alert },
+        peers: {
+          ...st.peers,
+          [msg.peer.publicKey]: {
+            publicKey: msg.peer.publicKey,
+            displayName: msg.peer.displayName,
+            online: true,
+            peerId: msg.peer.peerId,
+          },
+        },
+        verifiedPeers: { ...st.verifiedPeers, [msg.peer.publicKey]: trust.verified },
+        keyAlerts: { ...st.keyAlerts, [msg.peer.publicKey]: trust.alert },
       }));
       mesh?.connect(msg.peer.peerId);
       break;
     }
     case 'peer-left': {
       mesh?.handleSignal(msg.peerId, { kind: 'bye' });
-      clearTypingPeer(msg.peerId, set);
+      // typingPeers/verifiedPeers/keyAlerts are keyed by public key, but this
+      // event only carries the now-defunct ephemeral PeerId — resolve it.
+      const entry = Object.values(get().peers).find((p) => p.peerId === msg.peerId);
+      if (entry) clearTypingPeer(entry.publicKey, set);
       set((st) => {
-        const next = { ...st.peers };
-        delete next[msg.peerId];
         const streams = { ...st.remoteStreams };
         delete streams[msg.peerId];
-        const verified = { ...st.verifiedPeers };
-        delete verified[msg.peerId];
-        const alerts = { ...st.keyAlerts };
-        delete alerts[msg.peerId];
+        // Flip offline, don't delete — they're still a known room member and
+        // can still be messaged; trust state (verified/alert) also survives.
+        const peers = entry
+          ? { ...st.peers, [entry.publicKey]: { ...entry, online: false, peerId: undefined } }
+          : st.peers;
         return {
-          peers: next,
+          peers,
           remoteStreams: streams,
-          verifiedPeers: verified,
-          keyAlerts: alerts,
           // Dismiss a ringing prompt if the caller left.
           incomingCall: st.incomingCall?.from === msg.peerId ? null : st.incomingCall,
         };

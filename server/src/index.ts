@@ -17,6 +17,7 @@ import type {
   ServerMessage,
   ErrorCode,
   IceServerLike,
+  RoomMember,
 } from '@private-chat/shared';
 import {
   getRoom,
@@ -26,6 +27,7 @@ import {
   toIdentity,
   type Peer,
 } from './rooms.js';
+import { initDb, upsertRoomMember, fetchRoomMembers, persistMessage, fetchHistory } from './db.js';
 
 const PORT = Number(process.env.PORT ?? 8787);
 // Bind address. Default (unset) listens on all interfaces — good for LAN/dev.
@@ -148,6 +150,13 @@ function isValidPublicKey(b64: string): boolean {
 // Front it with a tiny HTTP server that answers those directly.
 const httpServer = createServer((req, res) => {
   if (req.method === 'GET' && (req.url === '/' || req.url === '/healthz')) {
+    // CORS: the deployed client (a different origin) pings this to keep a
+    // free-tier host from spinning down. Same allow-list as the WS origin
+    // check — harmless either way since this route reveals nothing but "ok".
+    const origin = req.headers.origin;
+    if (typeof origin === 'string' && (ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin))) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+    }
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('ok');
     return;
@@ -205,11 +214,12 @@ async function handleJoin(
     fail(socket, 'bad-request', 'Server is at capacity, try again later');
     return;
   }
+  const trimmedName = String(displayName ?? '').slice(0, 64) || 'Anonymous';
   const peer: Peer = {
     id: randomUUID(),
     socket,
     publicKey,
-    displayName: String(displayName ?? '').slice(0, 64) || 'Anonymous',
+    displayName: trimmedName,
     roomId,
   };
   const result = joinRoom(roomId, peer);
@@ -220,19 +230,47 @@ async function handleJoin(
   peerOf.set(socket, peer);
 
   // Announce the newcomer to everyone else right away; don't make them wait
-  // on the TURN fetch below.
+  // on the TURN fetch / DB round-trips below.
   for (const other of result.room.peers.values()) {
     if (other.id === peer.id) continue;
     send(other.socket, { type: 'peer-joined', peer: toIdentity(peer) });
   }
 
-  // Tell the newcomer who is already here, plus ICE servers for their calls.
-  // Fetched over this authenticated WS session only — never a public route.
-  const existing = [...result.room.peers.values()]
-    .filter((p) => p.id !== peer.id)
-    .map(toIdentity);
+  // Record this member durably (survives disconnects) so others can still
+  // address a message to them while they're offline. Merge the always-
+  // available live roster (works even with no DB configured, matching
+  // today's behavior exactly) with the durable one (adds previously-seen,
+  // currently-offline members — a no-op when persistence isn't set up).
+  await upsertRoomMember(roomId, publicKey, trimmedName).catch((err) =>
+    console.error('[db] upsertRoomMember failed', err),
+  );
+  const durableMembers = await fetchRoomMembers(roomId, publicKey).catch((err) => {
+    console.error('[db] fetchRoomMembers failed', err);
+    return [];
+  });
+  const membersByKey = new Map<string, RoomMember>();
+  for (const other of result.room.peers.values()) {
+    if (other.id === peer.id) continue;
+    membersByKey.set(other.publicKey, {
+      publicKey: other.publicKey,
+      displayName: other.displayName,
+      online: true,
+      peerId: other.id,
+    });
+  }
+  for (const m of durableMembers) {
+    if (!membersByKey.has(m.publicKey)) {
+      membersByKey.set(m.publicKey, { ...m, online: false });
+    }
+  }
+  const members = [...membersByKey.values()];
+
   const iceServers = await fetchTurnCredentials();
-  send(socket, { type: 'joined', selfId: peer.id, roomId, peers: existing, iceServers });
+  const history = await fetchHistory(roomId, publicKey).catch((err) => {
+    console.error('[db] fetchHistory failed', err);
+    return [];
+  });
+  send(socket, { type: 'joined', selfId: peer.id, roomId, members, iceServers, history });
 }
 
 function handleLeave(socket: WebSocket): void {
@@ -246,20 +284,38 @@ function handleLeave(socket: WebSocket): void {
   }
 }
 
-function handleRelay(socket: WebSocket, msg: Extract<ClientMessage, { type: 'relay' }>): void {
+/**
+ * Relay a chat message, addressed by the recipient's permanent public key
+ * (not a PeerId, which only exists while they're connected). If they're
+ * currently online, deliver live; independently and unconditionally (not
+ * gated on live delivery succeeding), persist a durable copy when the
+ * client asked us to — that's what makes offline delivery and cross-device
+ * history possible. Sending to yourself is just one more target here, same
+ * as any other recipient — except we never live-deliver it back (the
+ * sender already has their own optimistic local echo; this copy exists
+ * purely to be persisted for later/other-device retrieval).
+ */
+async function handleRelay(socket: WebSocket, msg: Extract<ClientMessage, { type: 'relay' }>): Promise<void> {
   const peer = peerOf.get(socket);
   if (!peer) return fail(socket, 'not-in-room', 'Join a room first');
+  if (!isValidPublicKey(msg.to)) return fail(socket, 'bad-request', 'Invalid recipient');
   const room = getRoom(peer.roomId);
   if (!room) return;
-  for (const other of room.peers.values()) {
-    if (other.id === peer.id) continue;
-    if (msg.to !== 'all' && msg.to !== other.id) continue;
-    send(other.socket, {
-      type: 'deliver',
-      from: peer.id,
+
+  const target = [...room.peers.values()].find((p) => p.publicKey === msg.to);
+  if (target && target.id !== peer.id) {
+    send(target.socket, { type: 'deliver', from: peer.publicKey, ciphertext: msg.ciphertext, nonce: msg.nonce });
+  }
+  if (msg.persist) {
+    await persistMessage({
+      roomId: peer.roomId,
+      recipientPublicKey: msg.to,
+      senderPublicKey: peer.publicKey,
+      senderDisplayName: peer.displayName,
       ciphertext: msg.ciphertext,
       nonce: msg.nonce,
-    });
+      sentAt: Date.now(),
+    }).catch((err) => console.error('[db] persistMessage failed', err));
   }
 }
 
@@ -346,6 +402,10 @@ const heartbeat = setInterval(() => {
 }, HEARTBEAT_MS);
 heartbeat.unref?.();
 wss.on('close', () => clearInterval(heartbeat));
+
+await initDb().catch((err) => {
+  console.error('[db] initDb failed — history/offline delivery disabled for this run', err);
+});
 
 httpServer.listen(PORT, HOST, () => {
   console.log(`[signaling] listening on ws://${HOST ?? '0.0.0.0'}:${PORT}`);

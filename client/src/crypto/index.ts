@@ -60,11 +60,16 @@ export function loadOrCreateIdentity(): Identity {
     }
   }
   const id = generateIdentity();
+  saveIdentity(id);
+  return id;
+}
+
+/** Persist an identity as the active one for this browser (overwrites any existing). */
+export function saveIdentity(identity: Identity): void {
   localStorage.setItem(
     STORAGE_KEY,
-    JSON.stringify({ publicKey: toB64(id.publicKey), privateKey: toB64(id.privateKey) }),
+    JSON.stringify({ publicKey: toB64(identity.publicKey), privateKey: toB64(identity.privateKey) }),
   );
-  return id;
 }
 
 /** Encrypt a UTF-8 string to a recipient. Returns base64 ciphertext + nonce. */
@@ -122,4 +127,112 @@ export function toB64(bytes: Uint8Array): string {
 
 export function fromB64(text: string): Uint8Array {
   return s().from_base64(text, s().base64_variants.ORIGINAL);
+}
+
+/* ------------------------------------------------------------------ */
+/* Identity export/import — carry one identity to a second device,     */
+/* so history sealed to that public key is readable there too.         */
+/* ------------------------------------------------------------------ */
+
+const IDENTITY_EXPORT_PREFIX = 'whisper-id-v1:';
+
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.length;
+  }
+  return out;
+}
+
+function packUint32(n: number): Uint8Array {
+  const buf = new Uint8Array(4);
+  new DataView(buf.buffer).setUint32(0, n, false);
+  return buf;
+}
+
+function unpackUint32(bytes: Uint8Array, offset: number): number {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset, false);
+}
+
+// libsodium-wrappers (the lightweight build used here, not -sumo) doesn't
+// include crypto_pwhash/Argon2 at all. Use the browser's native Web Crypto
+// PBKDF2 for the passphrase-derived key instead — no extra dependency, and
+// well past current (2023 OWASP) minimums for PBKDF2-HMAC-SHA256 — then hand
+// that key to libsodium's crypto_secretbox for the actual encryption.
+const PBKDF2_ITERATIONS = 600_000;
+const PBKDF2_SALT_BYTES = 16;
+
+async function deriveKeyPBKDF2(passphrase: string, salt: Uint8Array, iterations: number): Promise<Uint8Array> {
+  const baseKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, [
+    'deriveBits',
+  ]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: salt as BufferSource, iterations, hash: 'SHA-256' },
+    baseKey,
+    256,
+  );
+  return new Uint8Array(bits);
+}
+
+/**
+ * Encrypt the whole identity (public + private key) with a passphrase, for
+ * copying to a second device. This is a rare, high-value operation
+ * (compromise = full identity theft), so it's worth spending real time
+ * making offline brute-force expensive — hence the high PBKDF2 iteration
+ * count. The iteration count actually used is embedded in the envelope so a
+ * future tuning change can't break an export sitting in someone's password
+ * manager for months.
+ */
+export async function exportIdentity(identity: Identity, passphrase: string): Promise<string> {
+  const lib = s();
+  const salt = lib.randombytes_buf(PBKDF2_SALT_BYTES);
+  const key = await deriveKeyPBKDF2(passphrase, salt, PBKDF2_ITERATIONS);
+  // Encrypt the full identity (not just the private key) so a successful
+  // import can immediately re-derive and display the safety number — a
+  // concrete way for the user to confirm they got their own identity back.
+  const plaintext = lib.from_string(
+    JSON.stringify({ publicKey: toB64(identity.publicKey), privateKey: toB64(identity.privateKey) }),
+  );
+  const nonce = lib.randombytes_buf(lib.crypto_secretbox_NONCEBYTES);
+  const ciphertext = lib.crypto_secretbox_easy(plaintext, nonce, key);
+  lib.memzero(key);
+  lib.memzero(plaintext);
+
+  const blob = concatBytes([salt, packUint32(PBKDF2_ITERATIONS), nonce, ciphertext]);
+  return IDENTITY_EXPORT_PREFIX + toB64(blob);
+}
+
+/** Reverse of exportIdentity. Throws if the blob is malformed or the passphrase is wrong. */
+export async function importIdentity(blob: string, passphrase: string): Promise<Identity> {
+  if (!blob.startsWith(IDENTITY_EXPORT_PREFIX)) {
+    throw new Error('Not a valid Whisper identity export');
+  }
+  const lib = s();
+  const raw = fromB64(blob.slice(IDENTITY_EXPORT_PREFIX.length));
+  const nonceLen = lib.crypto_secretbox_NONCEBYTES;
+
+  let offset = 0;
+  const salt = raw.slice(offset, offset + PBKDF2_SALT_BYTES);
+  offset += PBKDF2_SALT_BYTES;
+  const iterations = unpackUint32(raw, offset);
+  offset += 4;
+  const nonce = raw.slice(offset, offset + nonceLen);
+  offset += nonceLen;
+  const ciphertext = raw.slice(offset);
+
+  const key = await deriveKeyPBKDF2(passphrase, salt, iterations);
+  let plain: Uint8Array;
+  try {
+    plain = lib.crypto_secretbox_open_easy(ciphertext, nonce, key);
+  } catch {
+    lib.memzero(key);
+    throw new Error('Wrong passphrase, or a corrupted export code');
+  }
+  lib.memzero(key);
+  const parsed = JSON.parse(lib.to_string(plain)) as { publicKey: string; privateKey: string };
+  lib.memzero(plain);
+  return { publicKey: fromB64(parsed.publicKey), privateKey: fromB64(parsed.privateKey) };
 }

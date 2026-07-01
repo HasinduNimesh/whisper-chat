@@ -27,3 +27,13 @@ services:
         sync: false
       - key: METERED_DOMAIN
         sync: false
+      # Optional Postgres connection string (e.g. from a free Neon.tech
+      # project — use its "direct", non-pooled connection string, since this
+      # is a long-lived process, not a serverless function). Enables message
+      # history: cross-device sync of your own sent messages, and offline
+      # delivery to room members who aren't currently connected. The server
+      # only ever stores ciphertext + routing metadata (room id, sender/
+      # recipient public keys, display names, timestamps) — never plaintext.
+      # Leave unset to run exactly as before: fully in-memory, no history.
+      - key: DATABASE_URL
+        sync: false

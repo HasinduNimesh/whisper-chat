@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { useChatStore } from '../store/useChatStore';
 import { Avatar } from './Avatar';
 import { Roster } from './Roster';
+import { ExportIdentityModal } from './IdentityBackup';
 import { Users, Search, DotsVertical, Logout, Lock } from './icons';
 
 /** WhatsApp-style left pane: your profile, search, the active room, participants. */
@@ -9,6 +11,8 @@ export function Sidebar() {
   const roomId = useChatStore((s) => s.roomId);
   const messages = useChatStore((s) => s.messages);
   const leave = useChatStore((s) => s.leave);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const last = messages[messages.length - 1];
   const preview = last
@@ -26,10 +30,28 @@ export function Sidebar() {
           <Avatar name={displayName || 'You'} size="md" />
           <span className="text-sm font-medium">{displayName || 'You'}</span>
         </div>
-        <div className="flex items-center gap-1 text-wa-secondary">
-          <button title="Menu" className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-white/10 hover:text-wa-primary">
+        <div className="relative flex items-center gap-1 text-wa-secondary">
+          <button
+            onClick={() => setMenuOpen((v) => !v)}
+            title="Menu"
+            aria-expanded={menuOpen}
+            className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-white/10 hover:text-wa-primary"
+          >
             <DotsVertical className="h-5 w-5" />
           </button>
+          {menuOpen && (
+            <div className="absolute right-0 top-11 z-20 w-48 overflow-hidden rounded-lg bg-wa-panel py-1 shadow-2xl ring-1 ring-wa-border">
+              <button
+                onClick={() => {
+                  setMenuOpen(false);
+                  setExportOpen(true);
+                }}
+                className="w-full px-3.5 py-2 text-left text-sm text-wa-primary transition hover:bg-wa-hover"
+              >
+                Export identity…
+              </button>
+            </div>
+          )}
           <button
             onClick={leave}
             title="Leave room"
@@ -73,6 +95,9 @@ export function Sidebar() {
       <div className="flex items-center justify-center gap-1.5 border-t border-wa-border py-2.5 text-[11px] text-wa-secondary">
         <Lock className="h-3 w-3" /> Your messages are end-to-end encrypted
       </div>
+
+      {menuOpen && <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />}
+      {exportOpen && <ExportIdentityModal onClose={() => setExportOpen(false)} />}
     </div>
   );
 }

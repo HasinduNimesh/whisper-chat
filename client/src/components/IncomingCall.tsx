@@ -13,7 +13,10 @@ export function IncomingCall() {
   const declineCall = useChatStore((s) => s.declineCall);
 
   if (!incomingCall) return null;
-  const caller = peers[incomingCall.from]?.displayName ?? 'Someone';
+  // incomingCall.from is a live PeerId (call signaling is peerId-based), but
+  // the roster is keyed by permanent public key — resolve by matching peerId.
+  const caller =
+    Object.values(peers).find((p) => p.peerId === incomingCall.from)?.displayName ?? 'Someone';
 
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 p-4">

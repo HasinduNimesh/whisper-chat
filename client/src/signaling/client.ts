@@ -69,3 +69,8 @@ export function signalingUrl(): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   return `${proto}://${location.host}/signaling`;
 }
+
+/** HTTP origin of the signaling/relay backend (same host signalingUrl() resolves to). */
+export function backendOrigin(): string {
+  return new URL(signalingUrl().replace(/^ws/, 'http')).origin;
+}

@@ -9,10 +9,12 @@
   },
   "dependencies": {
     "@private-chat/shared": "*",
+    "pg": "^8.22.0",
     "tsx": "^4.19.2",
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/pg": "^8.20.0",
     "@types/ws": "^8.5.13"
   }
 }

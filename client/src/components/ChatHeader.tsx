@@ -13,6 +13,10 @@ export function ChatHeader() {
   const leave = useChatStore((s) => s.leave);
 
   const peerList = Object.values(peers);
+  const onlineCount = peerList.filter((p) => p.online).length;
+  // "alone" gates whether you can send at all — you can still message known
+  // members while they're offline, so this is about room membership, not
+  // who's currently connected.
   const alone = peerList.length === 0;
   const members = [displayName || 'You', ...peerList.map((p) => p.displayName)].join(', ');
   const typing = typingLabel(typingNames(typingPeers, peers));
@@ -24,7 +28,7 @@ export function ChatHeader() {
         <div className="flex items-center gap-2">
           <span className="truncate font-medium text-wa-primary">Room {roomId}</span>
           <code className="hidden rounded bg-white/5 px-1.5 text-[11px] text-wa-secondary sm:inline">
-            {peerList.length + 1} online
+            {onlineCount + 1} online
           </code>
         </div>
         {typing ? (
@@ -39,14 +43,14 @@ export function ChatHeader() {
       <div className="flex items-center gap-1 text-wa-secondary">
         <IconBtn
           onClick={() => void startCall(true)}
-          disabled={alone || inCall}
+          disabled={onlineCount === 0 || inCall}
           title="Video call"
         >
           <Video className="h-5 w-5" />
         </IconBtn>
         <IconBtn
           onClick={() => void startCall(false)}
-          disabled={alone || inCall}
+          disabled={onlineCount === 0 || inCall}
           title="Voice call"
         >
           <Phone className="h-5 w-5" />

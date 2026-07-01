@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
-import { useChatStore } from '../store/useChatStore';
+import { useChatStore, type RosterEntry } from '../store/useChatStore';
 import { safetyNumber, fromB64 } from '../crypto';
-import type { PeerIdentity } from '@private-chat/shared';
 import { Avatar } from './Avatar';
 import { Phone, ShieldCheck, ShieldAlert, Shield, ChevronDown } from './icons';
 
@@ -21,7 +20,11 @@ export function Roster() {
       <ul>
         <SelfRow name={displayName || 'You'} inCall={inCall} />
         {peerList.map((p) => (
-          <PeerRow key={p.peerId} peer={p} inCall={!!remoteStreams[p.peerId]} />
+          <PeerRow
+            key={p.publicKey}
+            peer={p}
+            inCall={!!(p.peerId && remoteStreams[p.peerId])}
+          />
         ))}
       </ul>
     </div>
@@ -44,10 +47,10 @@ function SelfRow({ name, inCall }: { name: string; inCall: boolean }) {
 }
 
 /** A remote participant, with an expandable safety-number verification panel. */
-function PeerRow({ peer, inCall }: { peer: PeerIdentity; inCall: boolean }) {
+function PeerRow({ peer, inCall }: { peer: RosterEntry; inCall: boolean }) {
   const identity = useChatStore((s) => s.identity);
-  const verified = useChatStore((s) => s.verifiedPeers[peer.peerId]);
-  const alert = useChatStore((s) => s.keyAlerts[peer.peerId]);
+  const verified = useChatStore((s) => s.verifiedPeers[peer.publicKey]);
+  const alert = useChatStore((s) => s.keyAlerts[peer.publicKey]);
   const verifyPeer = useChatStore((s) => s.verifyPeer);
   const [open, setOpen] = useState(false);
 
@@ -69,14 +72,24 @@ function PeerRow({ peer, inCall }: { peer: PeerIdentity; inCall: boolean }) {
         className="flex w-full items-center gap-3 px-4 py-2 text-left transition hover:bg-wa-hover"
         aria-expanded={open}
       >
-        <Avatar name={peer.displayName} size="md" online />
+        <Avatar name={peer.displayName} size="md" online={peer.online} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium text-wa-primary">{peer.displayName}</span>
+            <span className={`truncate text-sm font-medium ${peer.online ? 'text-wa-primary' : 'text-wa-secondary'}`}>
+              {peer.displayName}
+            </span>
             <TrustBadge verified={verified} alert={alert} />
           </div>
           <span className="text-xs text-wa-secondary">
-            {alert ? 'security number changed' : verified ? 'verified' : inCall ? 'in call' : 'not verified'}
+            {alert
+              ? 'security number changed'
+              : verified
+                ? 'verified'
+                : inCall
+                  ? 'in call'
+                  : peer.online
+                    ? 'not verified'
+                    : 'offline'}
           </span>
         </div>
         {inCall && (
@@ -110,7 +123,7 @@ function PeerRow({ peer, inCall }: { peer: PeerIdentity; inCall: boolean }) {
           </code>
           {!verified && (
             <button
-              onClick={() => verifyPeer(peer.peerId)}
+              onClick={() => verifyPeer(peer.publicKey)}
               className="mt-2 flex items-center gap-1.5 rounded-lg bg-wa-green px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-wa-green-dark"
             >
               <ShieldCheck className="h-3.5 w-3.5" /> Mark as verified

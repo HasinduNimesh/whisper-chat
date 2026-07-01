@@ -8,6 +8,9 @@ import {
   sealTo,
   openFrom,
   safetyNumber,
+  exportIdentity,
+  importIdentity,
+  toB64,
 } from './index';
 
 beforeAll(async () => {
@@ -72,5 +75,30 @@ describe('safety number', () => {
     expect(safetyNumber(alice.publicKey, bob.publicKey)).not.toBe(
       safetyNumber(alice.publicKey, eve.publicKey),
     );
+  });
+});
+
+describe('identity export/import', () => {
+  it('round-trips an identity with the correct passphrase', async () => {
+    const alice = generateIdentity();
+    const blob = await exportIdentity(alice, 'correct horse battery staple');
+    const restored = await importIdentity(blob, 'correct horse battery staple');
+    expect(toB64(restored.publicKey)).toBe(toB64(alice.publicKey));
+    expect(toB64(restored.privateKey)).toBe(toB64(alice.privateKey));
+    // Same identity => same safety number against a third party.
+    const bob = generateIdentity();
+    expect(safetyNumber(restored.publicKey, bob.publicKey)).toBe(
+      safetyNumber(alice.publicKey, bob.publicKey),
+    );
+  }, 20_000);
+
+  it('rejects the wrong passphrase', async () => {
+    const alice = generateIdentity();
+    const blob = await exportIdentity(alice, 'correct horse battery staple');
+    await expect(importIdentity(blob, 'wrong passphrase')).rejects.toThrow();
+  }, 20_000);
+
+  it('rejects a malformed/foreign blob', async () => {
+    await expect(importIdentity('not-a-real-export', 'whatever')).rejects.toThrow();
   });
 });

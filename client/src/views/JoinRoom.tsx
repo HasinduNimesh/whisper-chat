@@ -2,6 +2,7 @@ import { useId, useState, type FormEvent, type ReactNode } from 'react';
 import { useChatStore } from '../store/useChatStore';
 import { Lock, Shield, Users, Plus, ArrowLeft } from '../components/icons';
 import { DocsLink } from '../components/DocsLink';
+import { ImportIdentityModal } from '../components/IdentityBackup';
 
 /** Landing screen: pick a display name + room code, then join. */
 export function JoinRoom() {
@@ -11,6 +12,8 @@ export function JoinRoom() {
 
   const [name, setName] = useState('');
   const [room, setRoom] = useState('');
+  const [importOpen, setImportOpen] = useState(false);
+  const [imported, setImported] = useState(false);
 
   const nameId = useId();
   const roomId = useId();
@@ -147,7 +150,28 @@ export function JoinRoom() {
           <Badge icon={<Users className="h-3.5 w-3.5" />}>2&ndash;4 people</Badge>
           <Badge icon={<Shield className="h-3.5 w-3.5" />}>No accounts</Badge>
         </div>
+
+        <div className="mt-4 text-center">
+          {imported ? (
+            <p className="text-xs text-wa-green">Identity imported — join a room to use it.</p>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              className="text-xs text-wa-secondary underline decoration-dotted transition hover:text-wa-primary"
+            >
+              Already have an identity from another device?
+            </button>
+          )}
+        </div>
       </div>
+
+      {importOpen && (
+        <ImportIdentityModal
+          onClose={() => setImportOpen(false)}
+          onImported={() => setImported(true)}
+        />
+      )}
 
       <DocsLink />
     </div>

@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { useChatStore } from '../store/useChatStore';
+import { useChatStore, type RosterEntry } from '../store/useChatStore';
+import type { PeerId } from '@private-chat/shared';
 import { Avatar } from './Avatar';
 import { Mic, MicOff, Video, VideoOff, PhoneOff, Minimize } from './icons';
+
+/** remoteStreams is keyed by the live, ephemeral PeerId; the roster is keyed
+ * by permanent public key — resolve a display name by matching peerId. */
+function nameForPeerId(peers: Record<string, RosterEntry>, peerId: PeerId): string {
+  return Object.values(peers).find((p) => p.peerId === peerId)?.displayName ?? 'Peer';
+}
 
 interface CallStageProps {
   elapsed: string;
@@ -61,7 +68,7 @@ export function CallStage({ elapsed, onMinimize }: CallStageProps) {
           <div className="relative h-full w-full">
             <VideoTile
               stream={soloRemote[1]}
-              label={peers[soloRemote[0]]?.displayName ?? 'Peer'}
+              label={nameForPeerId(peers, soloRemote[0])}
               big
             />
             <div className="absolute bottom-3 right-3 h-24 w-16 sm:h-36 sm:w-24">
@@ -76,7 +83,7 @@ export function CallStage({ elapsed, onMinimize }: CallStageProps) {
           <div className="grid h-full grid-cols-2 gap-2 sm:grid-cols-3">
             <VideoTile stream={localStream} label={you} muted mirror micOff={!micEnabled} />
             {entries.map(([peerId, stream]) => (
-              <VideoTile key={peerId} stream={stream} label={peers[peerId]?.displayName ?? 'Peer'} />
+              <VideoTile key={peerId} stream={stream} label={nameForPeerId(peers, peerId)} />
             ))}
           </div>
         )}
