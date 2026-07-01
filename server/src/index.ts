@@ -2,7 +2,7 @@
  * Minimal WebSocket signaling + relay server.
  *
  * Responsibilities (ALL it is allowed to do):
- *  - assign peer ids, manage room membership / presence (2-4 cap)
+ *  - assign peer ids, manage room membership / presence (2-30 cap)
  *  - relay opaque encrypted chat blobs between peers
  *  - relay WebRTC SDP/ICE signaling between peers
  *
@@ -25,6 +25,7 @@ import {
   leaveRoom,
   roomCount,
   toIdentity,
+  ROOM_MAX_PEERS,
   type Peer,
 } from './rooms.js';
 import { initDb, upsertRoomMember, fetchRoomMembers, persistMessage, fetchHistory } from './db.js';
@@ -46,8 +47,11 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? '')
 const MAX_CONNS_PER_IP = Number(process.env.MAX_CONNS_PER_IP ?? 30);
 const MAX_ROOMS = Number(process.env.MAX_ROOMS ?? 10_000);
 // Token-bucket message rate limit per socket: burst capacity + refill/sec.
-const MSG_BURST = Number(process.env.MSG_BURST ?? 60);
-const MSG_REFILL_PER_SEC = Number(process.env.MSG_REFILL_PER_SEC ?? 30);
+// Sized for rooms up to ROOM_MAX_PEERS: sendText fans out one relay frame
+// per recipient (including a self-addressed copy for history), so one
+// logical chat message in a full 30-person room costs ~31 tokens.
+const MSG_BURST = Number(process.env.MSG_BURST ?? 180);
+const MSG_REFILL_PER_SEC = Number(process.env.MSG_REFILL_PER_SEC ?? 60);
 const HEARTBEAT_MS = 30_000;
 
 // --- TURN credentials (Metered.ca) --------------------------------------
@@ -224,7 +228,7 @@ async function handleJoin(
   };
   const result = joinRoom(roomId, peer);
   if (!result.ok) {
-    fail(socket, 'room-full', 'This room is full (max 4 people)');
+    fail(socket, 'room-full', `This room is full (max ${ROOM_MAX_PEERS} people)`);
     return;
   }
   peerOf.set(socket, peer);

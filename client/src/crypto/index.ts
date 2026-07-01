@@ -119,6 +119,21 @@ export function safetyNumber(pubA: Uint8Array, pubB: Uint8Array): string {
   return out;
 }
 
+/**
+ * Deterministic room id for a 1:1 "personal chat" between two identities —
+ * both sides compute the same id independently (order-independent, same
+ * sort-then-hash pattern as safetyNumber()) so a contact can be opened
+ * without exchanging a room code. Not a secret: it's just a routing label,
+ * same as any user-typed room code.
+ */
+export function personalRoomId(pubA: Uint8Array, pubB: Uint8Array): string {
+  const lib = s();
+  const [first, second] = [toB64(pubA), toB64(pubB)].sort();
+  const digest = lib.crypto_generichash(16, lib.from_string(first + second));
+  const hex = Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `dm-${hex}`;
+}
+
 /* ---- base64 helpers (standard alphabet, padded — libsodium ORIGINAL) ---- */
 
 export function toB64(bytes: Uint8Array): string {
@@ -235,4 +250,51 @@ export async function importIdentity(blob: string, passphrase: string): Promise<
   const parsed = JSON.parse(lib.to_string(plain)) as { publicKey: string; privateKey: string };
   lib.memzero(plain);
   return { publicKey: fromB64(parsed.publicKey), privateKey: fromB64(parsed.privateKey) };
+}
+
+/* ------------------------------------------------------------------ */
+/* Contact codes — share your PUBLIC identity only, so someone else    */
+/* can add you and open a personal chat via personalRoomId(). Unlike   */
+/* exportIdentity(), there's no private key here and no passphrase:    */
+/* a public key is meant to be shared, there's nothing to protect.     */
+/* ------------------------------------------------------------------ */
+
+const CONTACT_CODE_PREFIX = 'whisper-contact-v1:';
+
+export interface ContactCode {
+  publicKey: string; // base64
+  displayName: string;
+}
+
+/** Encode your own public identity for sharing with a contact. */
+export function encodeContactCode(publicKey: Uint8Array, displayName: string): string {
+  const json = JSON.stringify({ publicKey: toB64(publicKey), displayName });
+  return CONTACT_CODE_PREFIX + toB64(s().from_string(json));
+}
+
+/** Decode+validate a pasted contact code. Throws if malformed or the embedded key isn't a valid 32-byte X25519 key. */
+export function decodeContactCode(code: string): ContactCode {
+  if (!code.startsWith(CONTACT_CODE_PREFIX)) {
+    throw new Error('Not a valid Whisper contact code');
+  }
+  const lib = s();
+  let parsed: { publicKey?: unknown; displayName?: unknown };
+  try {
+    parsed = JSON.parse(lib.to_string(fromB64(code.slice(CONTACT_CODE_PREFIX.length))));
+  } catch {
+    throw new Error('Corrupted contact code');
+  }
+  if (typeof parsed.publicKey !== 'string' || typeof parsed.displayName !== 'string') {
+    throw new Error('Corrupted contact code');
+  }
+  let keyLen = -1;
+  try {
+    keyLen = fromB64(parsed.publicKey).length;
+  } catch {
+    // fall through to the length check below, which will fail
+  }
+  if (keyLen !== 32) {
+    throw new Error('Corrupted contact code');
+  }
+  return { publicKey: parsed.publicKey, displayName: parsed.displayName };
 }

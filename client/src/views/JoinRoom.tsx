@@ -1,15 +1,18 @@
 import { useId, useState, type FormEvent, type ReactNode } from 'react';
 import { useChatStore } from '../store/useChatStore';
+import { ROOM_MIN_PEERS, ROOM_MAX_PEERS } from '@private-chat/shared';
 import { Lock, Shield, Users, Plus, ArrowLeft } from '../components/icons';
 import { DocsLink } from '../components/DocsLink';
 import { ImportIdentityModal } from '../components/IdentityBackup';
+import { ContactsPanel } from '../components/Contacts';
 
-/** Landing screen: pick a display name + room code, then join. */
+/** Landing screen: pick a display name, then join a room or open a contact. */
 export function JoinRoom() {
   const join = useChatStore((s) => s.join);
   const status = useChatStore((s) => s.status);
   const errorText = useChatStore((s) => s.errorText);
 
+  const [tab, setTab] = useState<'room' | 'contacts'>('room');
   const [name, setName] = useState('');
   const [room, setRoom] = useState('');
   const [importOpen, setImportOpen] = useState(false);
@@ -64,26 +67,48 @@ export function JoinRoom() {
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-wa-primary">Whisper</h1>
           <p className="mx-auto mt-1.5 max-w-[16rem] text-sm text-wa-secondary">
-            End-to-end encrypted chat &amp; calls for 2&ndash;4 people
+            End-to-end encrypted chat &amp; calls for {ROOM_MIN_PEERS}&ndash;{ROOM_MAX_PEERS} people
           </p>
         </header>
 
-        <form onSubmit={onSubmit} className="space-y-4" aria-busy={connecting} noValidate>
-          <Field label="Your name" htmlFor={nameId} hint="Optional — defaults to Anonymous">
-            <FieldShell icon={<Users className="h-4 w-4" />}>
-              <input
-                id={nameId}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Display name"
-                maxLength={64}
-                autoComplete="off"
-                disabled={connecting}
-                className="w-full bg-transparent text-sm text-wa-primary outline-none placeholder:text-wa-secondary disabled:opacity-60"
-              />
-            </FieldShell>
-          </Field>
+        <Field label="Your name" htmlFor={nameId} hint="Optional — defaults to Anonymous">
+          <FieldShell icon={<Users className="h-4 w-4" />}>
+            <input
+              id={nameId}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Display name"
+              maxLength={64}
+              autoComplete="off"
+              disabled={connecting}
+              className="w-full bg-transparent text-sm text-wa-primary outline-none placeholder:text-wa-secondary disabled:opacity-60"
+            />
+          </FieldShell>
+        </Field>
 
+        <div className="mt-4 grid grid-cols-2 gap-1 rounded-lg bg-wa-input p-1 text-xs font-medium">
+          <button
+            type="button"
+            onClick={() => setTab('room')}
+            className={`rounded-md py-1.5 transition ${tab === 'room' ? 'bg-wa-green text-white' : 'text-wa-secondary hover:text-wa-primary'}`}
+          >
+            Join a room
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('contacts')}
+            className={`rounded-md py-1.5 transition ${tab === 'contacts' ? 'bg-wa-green text-white' : 'text-wa-secondary hover:text-wa-primary'}`}
+          >
+            Contacts
+          </button>
+        </div>
+
+        {tab === 'contacts' ? (
+          <div className="mt-4">
+            <ContactsPanel myDisplayName={name} />
+          </div>
+        ) : (
+        <form onSubmit={onSubmit} className="mt-4 space-y-4" aria-busy={connecting} noValidate>
           <Field label="Room code" htmlFor={roomId}>
             <div className="flex gap-2">
               <FieldShell icon={<Lock className="h-4 w-4" />}>
@@ -113,7 +138,7 @@ export function JoinRoom() {
               </button>
             </div>
             <p id={hintId} className="mt-1.5 text-xs text-wa-secondary">
-              Share this code with up to 3 others to talk privately.
+              Share this code with up to {ROOM_MAX_PEERS - 1} others to talk privately.
             </p>
           </Field>
 
@@ -144,10 +169,13 @@ export function JoinRoom() {
             )}
           </button>
         </form>
+        )}
 
         <div className="mt-7 flex items-center justify-center gap-4 border-t border-wa-border pt-5 text-[11px] text-wa-secondary">
           <Badge icon={<Lock className="h-3.5 w-3.5" />}>E2E encrypted</Badge>
-          <Badge icon={<Users className="h-3.5 w-3.5" />}>2&ndash;4 people</Badge>
+          <Badge icon={<Users className="h-3.5 w-3.5" />}>
+            {ROOM_MIN_PEERS}&ndash;{ROOM_MAX_PEERS} people
+          </Badge>
           <Badge icon={<Shield className="h-3.5 w-3.5" />}>No accounts</Badge>
         </div>
 

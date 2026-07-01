@@ -11,6 +11,9 @@ import {
   exportIdentity,
   importIdentity,
   toB64,
+  personalRoomId,
+  encodeContactCode,
+  decodeContactCode,
 } from './index';
 
 beforeAll(async () => {
@@ -100,5 +103,50 @@ describe('identity export/import', () => {
 
   it('rejects a malformed/foreign blob', async () => {
     await expect(importIdentity('not-a-real-export', 'whatever')).rejects.toThrow();
+  });
+});
+
+describe('personal room id (contacts)', () => {
+  it('is identical regardless of argument order', () => {
+    const alice = generateIdentity();
+    const bob = generateIdentity();
+    expect(personalRoomId(alice.publicKey, bob.publicKey)).toBe(
+      personalRoomId(bob.publicKey, alice.publicKey),
+    );
+  });
+
+  it('differs for different pairs', () => {
+    const alice = generateIdentity();
+    const bob = generateIdentity();
+    const eve = generateIdentity();
+    expect(personalRoomId(alice.publicKey, bob.publicKey)).not.toBe(
+      personalRoomId(alice.publicKey, eve.publicKey),
+    );
+  });
+
+  it('is a short, room-id-safe string', () => {
+    const alice = generateIdentity();
+    const bob = generateIdentity();
+    const id = personalRoomId(alice.publicKey, bob.publicKey);
+    expect(id).toMatch(/^dm-[0-9a-f]{32}$/);
+    expect(id.length).toBeLessThan(128);
+  });
+});
+
+describe('contact codes', () => {
+  it('round-trips a public identity', () => {
+    const alice = generateIdentity();
+    const code = encodeContactCode(alice.publicKey, 'Alice');
+    const decoded = decodeContactCode(code);
+    expect(decoded.displayName).toBe('Alice');
+    expect(decoded.publicKey).toBe(toB64(alice.publicKey));
+  });
+
+  it('rejects a code with the wrong prefix', () => {
+    expect(() => decodeContactCode('whisper-id-v1:notacontact')).toThrow();
+  });
+
+  it('rejects a corrupted code', () => {
+    expect(() => decodeContactCode('whisper-contact-v1:not-valid-base64-json')).toThrow();
   });
 });

@@ -1,5 +1,6 @@
 import { useChatStore } from '../store/useChatStore';
 import { typingLabel, typingNames } from '../lib/typing';
+import { CALL_MAX_PEERS } from '@private-chat/shared';
 import { Users, Phone, Video, Search, DotsVertical, Logout } from './icons';
 
 /** Active-chat top bar: room identity + voice/video call actions. */
@@ -20,6 +21,14 @@ export function ChatHeader() {
   const alone = peerList.length === 0;
   const members = [displayName || 'You', ...peerList.map((p) => p.displayName)].join(', ');
   const typing = typingLabel(typingNames(typingPeers, peers));
+
+  // Full-mesh WebRTC can't scale past CALL_MAX_PEERS regardless of the much
+  // higher text-chat room cap — disable calls once the room's outgrown it,
+  // with a distinct reason from "no one online" so the tooltip is accurate.
+  const tooManyForCall = onlineCount + 1 > CALL_MAX_PEERS;
+  const callDisabled = onlineCount === 0 || inCall || tooManyForCall;
+  const callTitle = (label: string) =>
+    tooManyForCall ? `Video calls support up to ${CALL_MAX_PEERS} people` : label;
 
   return (
     <header className="flex items-center gap-3 bg-wa-header px-4 py-2.5">
@@ -43,15 +52,15 @@ export function ChatHeader() {
       <div className="flex items-center gap-1 text-wa-secondary">
         <IconBtn
           onClick={() => void startCall(true)}
-          disabled={onlineCount === 0 || inCall}
-          title="Video call"
+          disabled={callDisabled}
+          title={callTitle('Video call')}
         >
           <Video className="h-5 w-5" />
         </IconBtn>
         <IconBtn
           onClick={() => void startCall(false)}
-          disabled={onlineCount === 0 || inCall}
-          title="Voice call"
+          disabled={callDisabled}
+          title={callTitle('Voice call')}
         >
           <Phone className="h-5 w-5" />
         </IconBtn>

@@ -75,6 +75,9 @@ interface ChatState {
   remoteStreams: Record<string, MediaStream>; // peerId -> their media
   callError: string | null;
 
+  /** Load (or create) the local identity without joining a room — e.g. so a
+   * "share my contact code" UI has a public key before you've ever joined. */
+  ensureIdentity: () => Promise<Identity>;
   join: (roomId: string, displayName: string) => Promise<void>;
   sendText: (text: string) => void;
   sendTyping: (isTyping: boolean) => void;
@@ -131,11 +134,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
   remoteStreams: {},
   callError: null,
 
-  join: async (roomId, displayName) => {
-    set({ status: 'connecting', errorText: null, displayName });
+  ensureIdentity: async () => {
+    const existing = get().identity;
+    if (existing) return existing;
     await initCrypto();
     const identity = loadOrCreateIdentity();
     set({ identity });
+    return identity;
+  },
+
+  join: async (roomId, displayName) => {
+    set({ status: 'connecting', errorText: null, displayName });
+    const identity = await get().ensureIdentity();
 
     client = new SignalingClient(signalingUrl(), {
       onMessage: (msg) => handleServerMessage(msg, set, get),
