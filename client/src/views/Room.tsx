@@ -3,6 +3,7 @@ import { ChatHeader } from '../components/ChatHeader';
 import { MessageList } from '../components/MessageList';
 import { Composer } from '../components/Composer';
 import { CallOverlay } from '../components/CallOverlay';
+import { CallErrorToast } from '../components/CallErrorToast';
 import { IncomingCall } from '../components/IncomingCall';
 
 /** WhatsApp-style two-pane layout: contacts/info sidebar + active chat panel. */
@@ -15,6 +16,9 @@ export function Room() {
 
       <main className="flex min-w-0 flex-1 flex-col">
         <ChatHeader />
+        {/* Shows a call failure (e.g. permission denied) that happened
+            before CallOverlay ever had a reason to render. */}
+        <CallErrorToast />
         {/* Renders the compact "return to call" bar or the full-screen call
             view (CallStage) depending on minimized state. */}
         <CallOverlay />

@@ -91,6 +91,7 @@ interface ChatState {
   toggleMic: () => void;
   toggleCam: () => Promise<void>;
   endCall: () => void;
+  dismissCallError: () => void;
 }
 
 let client: SignalingClient | null = null;
@@ -367,6 +368,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     mesh?.close();
     teardownCall(set);
   },
+
+  dismissCallError: () => set({ callError: null }),
 }));
 
 /**
