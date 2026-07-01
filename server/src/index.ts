@@ -10,7 +10,7 @@
  * sealed with XChaCha20-Poly1305 and are forwarded byte-for-byte.
  */
 import { randomUUID } from 'node:crypto';
-import { createServer, type IncomingMessage } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
   ClientMessage,
@@ -28,7 +28,16 @@ import {
   ROOM_MAX_PEERS,
   type Peer,
 } from './rooms.js';
-import { initDb, upsertRoomMember, fetchRoomMembers, persistMessage, fetchHistory } from './db.js';
+import {
+  initDb,
+  upsertRoomMember,
+  fetchRoomMembers,
+  persistMessage,
+  fetchHistory,
+  claimHandle,
+  lookupHandle,
+  HandlesUnavailableError,
+} from './db.js';
 
 const PORT = Number(process.env.PORT ?? 8787);
 // Bind address. Default (unset) listens on all interfaces — good for LAN/dev.
@@ -148,12 +157,115 @@ function isValidPublicKey(b64: string): boolean {
   }
 }
 
+// --- @handle directory ---------------------------------------------------
+const HANDLE_PATTERN = /^[a-z0-9_]{3,20}$/;
+function isValidHandle(h: unknown): h is string {
+  return typeof h === 'string' && HANDLE_PATTERN.test(h);
+}
+
+// Stateless HTTP requests have no socket to hang the WS token bucket off of;
+// a simple fixed-window per-IP counter is enough to stop scripted handle
+// squatting/enumeration without new infrastructure.
+const HANDLE_RATE_LIMIT = Number(process.env.HANDLE_RATE_LIMIT ?? 20);
+const HANDLE_RATE_WINDOW_MS = 60_000;
+const handleRequestWindows = new Map<string, { count: number; windowStart: number }>();
+function allowHandleRequest(ip: string): boolean {
+  const now = Date.now();
+  const w = handleRequestWindows.get(ip);
+  if (!w || now - w.windowStart > HANDLE_RATE_WINDOW_MS) {
+    handleRequestWindows.set(ip, { count: 1, windowStart: now });
+    return true;
+  }
+  if (w.count >= HANDLE_RATE_LIMIT) return false;
+  w.count += 1;
+  return true;
+}
+
+function setCors(req: IncomingMessage, res: ServerResponse, methods: string): void {
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && (ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', methods);
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  }
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+/** Read+parse a small JSON body. Rejects on malformed JSON or oversized input. */
+function readJsonBody(req: IncomingMessage, maxBytes: number): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        req.destroy();
+        reject(new Error('Payload too large'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      } catch {
+        reject(new Error('Malformed JSON'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+async function handleClaimHandle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req, 4096);
+  } catch {
+    return sendJson(res, 400, { error: 'Malformed request' });
+  }
+  const { handle, publicKey, displayName } = (body ?? {}) as Record<string, unknown>;
+  if (!isValidHandle(handle)) return sendJson(res, 400, { error: 'Invalid handle' });
+  if (typeof publicKey !== 'string' || !isValidPublicKey(publicKey)) {
+    return sendJson(res, 400, { error: 'Invalid public key' });
+  }
+  const name = String(displayName ?? '').slice(0, 64) || 'Anonymous';
+  try {
+    const won = await claimHandle(handle, publicKey, name);
+    if (!won) return sendJson(res, 409, { error: 'Handle already taken' });
+    return sendJson(res, 200, { ok: true });
+  } catch (err) {
+    if (err instanceof HandlesUnavailableError) return sendJson(res, 503, { error: err.message });
+    console.error('[handles] claim failed', err);
+    return sendJson(res, 500, { error: 'Internal error' });
+  }
+}
+
+async function handleLookupHandle(handle: string, res: ServerResponse): Promise<void> {
+  if (!isValidHandle(handle)) return sendJson(res, 400, { error: 'Invalid handle' });
+  try {
+    const result = await lookupHandle(handle);
+    if (!result) return sendJson(res, 404, { error: 'Not found' });
+    return sendJson(res, 200, result);
+  } catch (err) {
+    if (err instanceof HandlesUnavailableError) return sendJson(res, 503, { error: err.message });
+    console.error('[handles] lookup failed', err);
+    return sendJson(res, 500, { error: 'Internal error' });
+  }
+}
+
 // A bare `ws` server has no HTTP handler of its own — plain GETs (e.g. a
 // platform health check on Render/Railway/etc.) would get ws's built-in 426
 // "Upgrade Required" response, which most health checks treat as failure.
-// Front it with a tiny HTTP server that answers those directly.
+// Front it with a tiny HTTP server that answers those directly, plus the
+// small @handle directory REST API (see server/src/db.ts for the model).
 const httpServer = createServer((req, res) => {
-  if (req.method === 'GET' && (req.url === '/' || req.url === '/healthz')) {
+  const path = (req.url ?? '').split('?')[0];
+
+  if (req.method === 'GET' && (path === '/' || path === '/healthz')) {
     // CORS: the deployed client (a different origin) pings this to keep a
     // free-tier host from spinning down. Same allow-list as the WS origin
     // check — harmless either way since this route reveals nothing but "ok".
@@ -165,6 +277,28 @@ const httpServer = createServer((req, res) => {
     res.end('ok');
     return;
   }
+
+  if (path === '/handles/claim' || (path.startsWith('/handles/') && path !== '/handles/')) {
+    const methods = path === '/handles/claim' ? 'POST, OPTIONS' : 'GET, OPTIONS';
+    setCors(req, res, methods);
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204).end();
+      return;
+    }
+    if (!allowHandleRequest(clientIp(req))) {
+      sendJson(res, 429, { error: 'Too many requests, try again shortly' });
+      return;
+    }
+    if (path === '/handles/claim' && req.method === 'POST') {
+      void handleClaimHandle(req, res);
+      return;
+    }
+    if (path !== '/handles/claim' && req.method === 'GET') {
+      void handleLookupHandle(decodeURIComponent(path.slice('/handles/'.length)), res);
+      return;
+    }
+  }
+
   res.writeHead(404).end();
 });
 

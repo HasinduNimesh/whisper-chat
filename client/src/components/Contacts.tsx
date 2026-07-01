@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useChatStore } from '../store/useChatStore';
-import { fromB64, personalRoomId, encodeContactCode, decodeContactCode } from '../crypto';
+import { fromB64, toB64, personalRoomId, encodeContactCode, decodeContactCode } from '../crypto';
 import { loadContacts, addContact, removeContact, type Contact } from '../crypto/contacts';
+import { isValidHandle, claimHandle, lookupHandle } from '../lib/handles';
 import { Avatar } from './Avatar';
-import { Modal, PrimaryButton, SecondaryButton, ErrorText, inputClass } from './ModalKit';
+import { Modal, Warning, PrimaryButton, SecondaryButton, ErrorText, inputClass } from './ModalKit';
+
+const MY_HANDLE_KEY = 'whisper.myHandle.v1'; // local cache/hint only — the server is authoritative
 
 /**
  * Saved contacts you can message directly, without swapping a room code
@@ -99,32 +102,66 @@ export function ContactsPanel({ myDisplayName }: { myDisplayName: string }) {
   );
 }
 
-function AddContactModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
-  const [code, setCode] = useState('');
-  const [error, setError] = useState<string | null>(null);
+/** Strips an optional leading "@" so both "alice" and "@alice" work as input. */
+function normalizeHandleInput(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.startsWith('@') ? trimmed.slice(1) : trimmed;
+}
 
-  function submit() {
+function AddContactModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+  const [input, setInput] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    setError(null);
+    const trimmed = input.trim();
+    // A pasted contact code has a recognizable prefix; anything else is
+    // treated as an @handle to look up.
+    if (trimmed.startsWith('whisper-contact-v1:')) {
+      try {
+        const contact = decodeContactCode(trimmed);
+        addContact(contact.publicKey, contact.displayName);
+        onAdded();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Invalid contact code');
+      }
+      return;
+    }
+
+    const handle = normalizeHandleInput(trimmed);
+    if (!isValidHandle(handle)) {
+      setError('Paste a contact code, or enter a handle (3-20 letters/numbers/underscores).');
+      return;
+    }
+    setBusy(true);
     try {
-      const contact = decodeContactCode(code.trim());
-      addContact(contact.publicKey, contact.displayName);
+      const result = await lookupHandle(handle);
+      if (!result) {
+        setError(`No one has claimed @${handle}.`);
+        return;
+      }
+      addContact(result.publicKey, result.displayName);
       onAdded();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid contact code');
+      setError(err instanceof Error ? err.message : 'Lookup failed');
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
     <Modal title="Add contact" onClose={onClose}>
       <textarea
-        value={code}
-        onChange={(e) => setCode(e.target.value)}
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
         rows={4}
-        placeholder="Paste their contact code"
+        placeholder="Paste their contact code, or type @handle"
         className={`${inputClass} resize-none font-mono text-[11px] leading-relaxed`}
       />
       {error && <ErrorText>{error}</ErrorText>}
-      <PrimaryButton onClick={submit} disabled={!code.trim()}>
-        Add
+      <PrimaryButton onClick={() => void submit()} disabled={busy || !input.trim()}>
+        {busy ? 'Looking up…' : 'Add'}
       </PrimaryButton>
     </Modal>
   );
@@ -134,6 +171,12 @@ function ShareCodeModal({ displayName, onClose }: { displayName: string; onClose
   const ensureIdentity = useChatStore((s) => s.ensureIdentity);
   const [code, setCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  const [myHandle, setMyHandle] = useState(() => localStorage.getItem(MY_HANDLE_KEY) ?? '');
+  const [handleInput, setHandleInput] = useState('');
+  const [handleError, setHandleError] = useState<string | null>(null);
+  const [handleBusy, setHandleBusy] = useState(false);
+  const [handleSaved, setHandleSaved] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,6 +192,29 @@ function ShareCodeModal({ displayName, onClose }: { displayName: string; onClose
     if (!code) return;
     await navigator.clipboard.writeText(code);
     setCopied(true);
+  }
+
+  async function saveHandle() {
+    setHandleError(null);
+    setHandleSaved(false);
+    const handle = normalizeHandleInput(handleInput);
+    if (!isValidHandle(handle)) {
+      setHandleError('3-20 lowercase letters, numbers, or underscores.');
+      return;
+    }
+    setHandleBusy(true);
+    try {
+      const identity = await ensureIdentity();
+      await claimHandle(handle, toB64(identity.publicKey), displayName.trim() || 'Anonymous');
+      localStorage.setItem(MY_HANDLE_KEY, handle);
+      setMyHandle(handle);
+      setHandleInput('');
+      setHandleSaved(true);
+    } catch (err) {
+      setHandleError(err instanceof Error ? err.message : 'Could not claim that handle');
+    } finally {
+      setHandleBusy(false);
+    }
   }
 
   return (
@@ -167,6 +233,38 @@ function ShareCodeModal({ displayName, onClose }: { displayName: string; onClose
       <PrimaryButton onClick={() => void copy()} disabled={!code}>
         {copied ? 'Copied ✓' : 'Copy to clipboard'}
       </PrimaryButton>
+
+      <div className="mt-1 space-y-2 border-t border-wa-border pt-3">
+        <p className="text-xs font-medium text-wa-primary">
+          Handle{myHandle ? `: @${myHandle}` : ' (optional)'}
+        </p>
+        <p className="text-[11px] text-wa-secondary">
+          A short, memorable way for someone to find you instead of pasting the code above.
+        </p>
+        <div className="flex gap-2">
+          <input
+            value={handleInput}
+            onChange={(e) => setHandleInput(e.target.value.toLowerCase())}
+            placeholder={myHandle || 'e.g. alice_2'}
+            maxLength={20}
+            className={inputClass}
+          />
+          <button
+            onClick={() => void saveHandle()}
+            disabled={handleBusy || !handleInput.trim()}
+            className="shrink-0 rounded-lg bg-wa-input px-3 text-xs font-medium text-wa-secondary transition hover:text-wa-primary disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {handleBusy ? 'Saving…' : myHandle ? 'Change' : 'Claim'}
+          </button>
+        </div>
+        {handleError && <ErrorText>{handleError}</ErrorText>}
+        {handleSaved && <p className="text-xs text-wa-green">Saved.</p>}
+        <Warning>
+          A handle only helps someone find your public key — it isn&apos;t proof of who you are.
+          Always verify the safety number after adding a contact this way.
+        </Warning>
+      </div>
+
       <SecondaryButton onClick={onClose}>Done</SecondaryButton>
     </Modal>
   );

@@ -78,6 +78,13 @@ export function initDb(): Promise<void> {
 
         CREATE INDEX IF NOT EXISTS messages_recipient_idx
           ON messages (room_id, recipient_public_key, inserted_at);
+
+        CREATE TABLE IF NOT EXISTS handles (
+          handle       TEXT PRIMARY KEY,
+          public_key   TEXT NOT NULL UNIQUE,
+          display_name TEXT NOT NULL,
+          claimed_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
         `,
       )
       .then(() => undefined)
@@ -183,4 +190,59 @@ export async function fetchHistory(
     nonce: r.nonce,
     sentAt: Number(r.sent_at),
   }));
+}
+
+/**
+ * Unlike everything else in this file, the @handle directory has no
+ * in-memory fallback — there's nothing sensible to "degrade" to, since the
+ * whole point is a standing, globally-queryable lookup. Callers should catch
+ * this and surface a clear "not set up" response rather than a generic error.
+ */
+export class HandlesUnavailableError extends Error {
+  constructor() {
+    super('Handle directory requires DATABASE_URL to be configured');
+  }
+}
+
+function requirePool(): pg.Pool {
+  const p = getPool();
+  if (!p) throw new HandlesUnavailableError();
+  return p;
+}
+
+/**
+ * Claim `handle` for `publicKey`, releasing any handle that key previously
+ * held. Returns false (never throws for this case) if the handle is already
+ * taken by a different key — first writer wins on the race.
+ */
+export async function claimHandle(handle: string, publicKey: string, displayName: string): Promise<boolean> {
+  const p = requirePool();
+  const client = await p.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM handles WHERE public_key = $1', [publicKey]);
+    const res = await client.query(
+      `INSERT INTO handles (handle, public_key, display_name)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (handle) DO NOTHING`,
+      [handle, publicKey, displayName],
+    );
+    await client.query('COMMIT');
+    return (res.rowCount ?? 0) > 0;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function lookupHandle(handle: string): Promise<{ publicKey: string; displayName: string } | null> {
+  const p = requirePool();
+  const res = await p.query<{ public_key: string; display_name: string }>(
+    'SELECT public_key, display_name FROM handles WHERE handle = $1',
+    [handle],
+  );
+  const row = res.rows[0];
+  return row ? { publicKey: row.public_key, displayName: row.display_name } : null;
 }
