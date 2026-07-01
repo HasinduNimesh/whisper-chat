@@ -11,12 +11,19 @@ export const ROOM_MIN_PEERS = 2;
 export const ROOM_MAX_PEERS = 30;
 
 /**
- * Video/voice calls use full-mesh WebRTC (every participant connects
- * directly to every other), which cannot scale to a 30-person room — each
- * device would need 29 simultaneous upload streams. This caps call
- * participation independently of room membership; text chat is unaffected.
+ * Calls use full-mesh WebRTC (every participant connects directly to every
+ * other, each uploading their own media stream), which caps how far calls
+ * can scale independently of the much higher text-chat room cap.
+ *
+ * Video is the binding constraint: at 30 people, each device would need 29
+ * simultaneous video uploads — not viable on ordinary connections. Voice-only
+ * mesh is far lighter (audio streams are roughly 15-25x smaller) and
+ * tolerates a much bigger room, though reliability still degrades gradually
+ * as peer count grows (total connections in the room scale as
+ * peers*(peers-1)/2), so this is a practical ceiling, not a hard wall.
  */
-export const CALL_MAX_PEERS = 4;
+export const VIDEO_CALL_MAX_PEERS = 4;
+export const VOICE_CALL_MAX_PEERS = 20;
 
 /** A peer's stable id for the lifetime of a connection (assigned by server). */
 export type PeerId = string;

@@ -13,8 +13,30 @@
 import pg from 'pg';
 import type { HistoryEntry, RoomMember } from '@private-chat/shared';
 
-const DATABASE_URL = process.env.DATABASE_URL;
 const HISTORY_LIMIT = 200;
+
+/**
+ * pg-connection-string currently treats sslmode=require/prefer/verify-ca as
+ * aliases for verify-full, but warns on every connection that a future major
+ * version will switch them to weaker, standard-libpq semantics. That warning
+ * fires purely off the string (an explicit `ssl` Pool option doesn't
+ * suppress it), so normalize to the unambiguous verify-full here — pins us
+ * to today's (correct, cert-verifying) behavior regardless of that future
+ * change, and stops the noisy per-connection warning in the logs.
+ */
+function normalizeSslMode(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (['require', 'prefer', 'verify-ca'].includes(parsed.searchParams.get('sslmode') ?? '')) {
+      parsed.searchParams.set('sslmode', 'verify-full');
+    }
+    return parsed.toString();
+  } catch {
+    return url; // malformed URL — let `pg` itself surface the real error
+  }
+}
+
+const DATABASE_URL = process.env.DATABASE_URL ? normalizeSslMode(process.env.DATABASE_URL) : undefined;
 
 let pool: pg.Pool | null = null;
 let initPromise: Promise<void> | null = null;

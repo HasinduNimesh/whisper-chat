@@ -13,6 +13,7 @@ import type {
   IceServerLike,
   RtcSignal,
 } from '@private-chat/shared';
+import { VIDEO_CALL_MAX_PEERS } from '@private-chat/shared';
 import {
   initCrypto,
   loadOrCreateIdentity,
@@ -277,6 +278,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   startCall: async (withVideo) => {
+    // Defense in depth: the UI already disables the video-call button once
+    // the room's too big, but don't rely solely on that.
+    if (withVideo) {
+      const onlineCount = Object.values(get().peers).filter((p) => p.online).length;
+      if (onlineCount + 1 > VIDEO_CALL_MAX_PEERS) {
+        set({ callError: `Video isn't supported in calls above ${VIDEO_CALL_MAX_PEERS} people.` });
+        return;
+      }
+    }
     try {
       await enterCall(withVideo, set, get);
     } catch (err) {
@@ -322,7 +332,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   toggleCam: async () => {
-    const { localStream, camEnabled } = get();
+    const { localStream, camEnabled, peers } = get();
     if (!localStream || !mesh) return;
     if (camEnabled) {
       const track = localStream.getVideoTracks()[0];
@@ -333,6 +343,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       set({ camEnabled: false });
     } else {
+      // A voice-only call can grow past VIDEO_CALL_MAX_PEERS (that's the
+      // whole point of the higher voice cap) — don't let turning video on
+      // mid-call silently push a full video mesh onto everyone at that size.
+      const onlineCount = Object.values(peers).filter((p) => p.online).length;
+      if (onlineCount + 1 > VIDEO_CALL_MAX_PEERS) {
+        set({ callError: `Video isn't supported in calls above ${VIDEO_CALL_MAX_PEERS} people.` });
+        return;
+      }
       try {
         const cam = await navigator.mediaDevices.getUserMedia({ video: true });
         const track = cam.getVideoTracks()[0];

@@ -1,6 +1,6 @@
 import { useChatStore } from '../store/useChatStore';
 import { typingLabel, typingNames } from '../lib/typing';
-import { CALL_MAX_PEERS } from '@private-chat/shared';
+import { VIDEO_CALL_MAX_PEERS, VOICE_CALL_MAX_PEERS } from '@private-chat/shared';
 import { Users, Phone, Video, Search, DotsVertical, Logout } from './icons';
 
 /** Active-chat top bar: room identity + voice/video call actions. */
@@ -22,13 +22,16 @@ export function ChatHeader() {
   const members = [displayName || 'You', ...peerList.map((p) => p.displayName)].join(', ');
   const typing = typingLabel(typingNames(typingPeers, peers));
 
-  // Full-mesh WebRTC can't scale past CALL_MAX_PEERS regardless of the much
-  // higher text-chat room cap — disable calls once the room's outgrown it,
-  // with a distinct reason from "no one online" so the tooltip is accurate.
-  const tooManyForCall = onlineCount + 1 > CALL_MAX_PEERS;
-  const callDisabled = onlineCount === 0 || inCall || tooManyForCall;
-  const callTitle = (label: string) =>
-    tooManyForCall ? `Video calls support up to ${CALL_MAX_PEERS} people` : label;
+  // Full-mesh WebRTC caps how far calls can scale regardless of the much
+  // higher text-chat room cap. Video is the binding constraint (each device
+  // uploads its own stream to every other participant); voice-only mesh is
+  // far lighter and tolerates a much bigger room — so they get separate caps.
+  const videoTooMany = onlineCount + 1 > VIDEO_CALL_MAX_PEERS;
+  const voiceTooMany = onlineCount + 1 > VOICE_CALL_MAX_PEERS;
+  const videoDisabled = onlineCount === 0 || inCall || videoTooMany;
+  const voiceDisabled = onlineCount === 0 || inCall || voiceTooMany;
+  const videoTitle = videoTooMany ? `Video calls support up to ${VIDEO_CALL_MAX_PEERS} people` : 'Video call';
+  const voiceTitle = voiceTooMany ? `Voice calls support up to ${VOICE_CALL_MAX_PEERS} people` : 'Voice call';
 
   return (
     <header className="flex items-center gap-3 bg-wa-header px-4 py-2.5">
@@ -52,15 +55,15 @@ export function ChatHeader() {
       <div className="flex items-center gap-1 text-wa-secondary">
         <IconBtn
           onClick={() => void startCall(true)}
-          disabled={callDisabled}
-          title={callTitle('Video call')}
+          disabled={videoDisabled}
+          title={videoTitle}
         >
           <Video className="h-5 w-5" />
         </IconBtn>
         <IconBtn
           onClick={() => void startCall(false)}
-          disabled={callDisabled}
-          title={callTitle('Voice call')}
+          disabled={voiceDisabled}
+          title={voiceTitle}
         >
           <Phone className="h-5 w-5" />
         </IconBtn>

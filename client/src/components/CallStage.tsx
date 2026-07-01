@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useChatStore, type RosterEntry } from '../store/useChatStore';
-import type { PeerId } from '@private-chat/shared';
+import { VIDEO_CALL_MAX_PEERS, type PeerId } from '@private-chat/shared';
 import { Avatar } from './Avatar';
 import { Mic, MicOff, Video, VideoOff, PhoneOff, Minimize } from './icons';
 
@@ -39,6 +39,9 @@ export function CallStage({ elapsed, onMinimize }: CallStageProps) {
   const entries = Object.entries(remoteStreams);
   const soloRemote = entries.length === 1 ? entries[0] : null;
   const you = `${displayName || 'You'} (you)`;
+  // A voice-only call can grow past VIDEO_CALL_MAX_PEERS; don't let turning
+  // video on at that size silently push a full video mesh onto everyone.
+  const videoBlockedBySize = !camEnabled && entries.length + 1 > VIDEO_CALL_MAX_PEERS;
 
   return (
     <div
@@ -98,7 +101,18 @@ export function CallStage({ elapsed, onMinimize }: CallStageProps) {
         <ControlButton onClick={toggleMic} off={!micEnabled} title={micEnabled ? 'Mute' : 'Unmute'}>
           {micEnabled ? <Mic className="h-6 w-6" /> : <MicOff className="h-6 w-6" />}
         </ControlButton>
-        <ControlButton onClick={() => void toggleCam()} off={!camEnabled} title={camEnabled ? 'Stop video' : 'Start video'}>
+        <ControlButton
+          onClick={() => void toggleCam()}
+          off={!camEnabled}
+          disabled={videoBlockedBySize}
+          title={
+            videoBlockedBySize
+              ? `Video isn't supported in calls above ${VIDEO_CALL_MAX_PEERS} people`
+              : camEnabled
+                ? 'Stop video'
+                : 'Start video'
+          }
+        >
           {camEnabled ? <Video className="h-6 w-6" /> : <VideoOff className="h-6 w-6" />}
         </ControlButton>
         <button
@@ -119,18 +133,21 @@ function ControlButton({
   children,
   title,
   off,
+  disabled,
 }: {
   onClick: () => void;
   children: React.ReactNode;
   title: string;
   off?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       title={title}
       aria-label={title}
-      className={`flex h-14 w-14 items-center justify-center rounded-full shadow-lg transition active:scale-95 ${
+      className={`flex h-14 w-14 items-center justify-center rounded-full shadow-lg transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 ${
         off ? 'bg-white/90 text-wa-header' : 'bg-white/15 text-white hover:bg-white/25'
       }`}
     >
