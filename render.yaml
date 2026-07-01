@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: whisper-signaling
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    rootDir: .
+    buildCommand: npm install && npm run build --workspace=shared && npm run build --workspace=server
+    startCommand: npm run start --workspace=server
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      # Comma-separated list of allowed browser Origins (your Vercel URL(s)).
+      # Set this in the Render dashboard after your Vercel deploy is live —
+      # e.g. https://whisper-chat.vercel.app,https://whisper-chat-git-main-you.vercel.app
+      - key: ALLOWED_ORIGINS
+        sync: false

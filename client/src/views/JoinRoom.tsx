@@ -1,6 +1,7 @@
 import { useId, useState, type FormEvent, type ReactNode } from 'react';
 import { useChatStore } from '../store/useChatStore';
 import { Lock, Shield, Users, Plus, ArrowLeft } from '../components/icons';
+import { DocsLink } from '../components/DocsLink';
 
 /** Landing screen: pick a display name + room code, then join. */
 export function JoinRoom() {
@@ -147,6 +148,8 @@ export function JoinRoom() {
           <Badge icon={<Shield className="h-3.5 w-3.5" />}>No accounts</Badge>
         </div>
       </div>
+
+      <DocsLink />
     </div>
   );
 }

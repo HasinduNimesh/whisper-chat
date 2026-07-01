@@ -106,6 +106,7 @@ the room auto-join, and you can mute or toggle your camera mid-call.
 | **Quick public link** | Run server + client, then `cloudflared tunnel --url http://localhost:5173` (or `ngrok http 5173`). One origin, HTTPS, calls work. Link lives while your machine runs. |
 | **LAN (other devices)** | `HTTPS=1 npm run dev:client`, open `https://<your-ip>:5173` and accept the self-signed cert. |
 | **Production (your server)** | nginx serves the built client + proxies `/signaling` to the Node server, with Let's Encrypt TLS and systemd. See [`deploy/README.md`](deploy/README.md). |
+| **Render + Vercel (managed, no server to babysit)** | Server on Render, client on Vercel, as two origins. See [`DEPLOYMENT.md`](DEPLOYMENT.md). |
 
 The client targets same-origin `wss://<host>/signaling` automatically, so no
 signaling env var is needed when a tunnel/nginx fronts both. Override with

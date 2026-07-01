@@ -177,3 +177,10 @@ export const ShieldCheck = (p: IconProps) => (
     <path d="M9 12l2 2 4-4" />
   </Base>
 );
+
+export const BookOpen = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 6.5c-1.5-1-4-1.5-6-1.5v13c2 0 4.5.5 6 1.5 1.5-1 4-1.5 6-1.5V5c-2 0-4.5.5-6 1.5z" />
+    <path d="M12 6.5V19" />
+  </Base>
+);

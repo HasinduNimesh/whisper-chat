@@ -10,7 +10,7 @@
  * sealed with XChaCha20-Poly1305 and are forwarded byte-for-byte.
  */
 import { randomUUID } from 'node:crypto';
-import type { IncomingMessage } from 'node:http';
+import { createServer, type IncomingMessage } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
   ClientMessage,
@@ -91,9 +91,21 @@ function isValidPublicKey(b64: string): boolean {
   }
 }
 
+// A bare `ws` server has no HTTP handler of its own — plain GETs (e.g. a
+// platform health check on Render/Railway/etc.) would get ws's built-in 426
+// "Upgrade Required" response, which most health checks treat as failure.
+// Front it with a tiny HTTP server that answers those directly.
+const httpServer = createServer((req, res) => {
+  if (req.method === 'GET' && (req.url === '/' || req.url === '/healthz')) {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('ok');
+    return;
+  }
+  res.writeHead(404).end();
+});
+
 const wss = new WebSocketServer({
-  port: PORT,
-  host: HOST,
+  server: httpServer,
   maxPayload: MAX_PAYLOAD,
   verifyClient: ({ origin }, done) => {
     // No Origin header => non-browser client (curl, native); allow it.
@@ -276,7 +288,9 @@ const heartbeat = setInterval(() => {
 heartbeat.unref?.();
 wss.on('close', () => clearInterval(heartbeat));
 
-console.log(`[signaling] listening on ws://${HOST ?? '0.0.0.0'}:${PORT}`);
-if (ALLOWED_ORIGINS.length === 0) {
-  console.warn('[signaling] ALLOWED_ORIGINS unset — accepting any browser origin. Set it in production.');
-}
+httpServer.listen(PORT, HOST, () => {
+  console.log(`[signaling] listening on ws://${HOST ?? '0.0.0.0'}:${PORT}`);
+  if (ALLOWED_ORIGINS.length === 0) {
+    console.warn('[signaling] ALLOWED_ORIGINS unset — accepting any browser origin. Set it in production.');
+  }
+});
