@@ -178,6 +178,18 @@ export const ShieldCheck = (p: IconProps) => (
   </Base>
 );
 
+export const Expand = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+  </Base>
+);
+
+export const Minimize = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
+  </Base>
+);
+
 export const BookOpen = (p: IconProps) => (
   <Base {...p}>
     <path d="M12 6.5c-1.5-1-4-1.5-6-1.5v13c2 0 4.5.5 6 1.5 1.5-1 4-1.5 6-1.5V5c-2 0-4.5.5-6 1.5z" />

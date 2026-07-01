@@ -12,6 +12,7 @@ import type {
   TextPayload,
   TypingPayload,
   IceServerLike,
+  RtcSignal,
 } from '@private-chat/shared';
 import {
   initCrypto,
@@ -77,6 +78,16 @@ interface ChatState {
 
 let client: SignalingClient | null = null;
 let mesh: CallMesh | null = null;
+
+/**
+ * Signals from a still-ringing caller (offer + any trickled ICE), held until
+ * the user actually Accepts. We deliberately do NOT create the RTCPeerConnection
+ * or answer the offer while ringing — some browsers won't correctly upgrade an
+ * already-negotiated recvonly connection to send media once local tracks are
+ * added later, leaving that one leg silently one-directional. Answering only
+ * after local media exists avoids the whole class of bug.
+ */
+const pendingCallSignals = new Map<PeerId, RtcSignal[]>();
 
 /** Auto-clear a peer's typing flag if no refresh arrives (in case 'false' is lost). */
 const TYPING_STALE_MS = 5000;
@@ -234,20 +245,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /** Accept a ringing incoming call: NOW acquire the mic and join the mesh. */
   acceptCall: async () => {
-    if (!get().incomingCall) return;
+    const ic = get().incomingCall;
+    if (!ic) return;
     set({ incomingCall: null });
     try {
-      await enterCall(false, set, get);
+      // Acquire media and connect to every other peer first; the caller's
+      // own connection is deferred so we can answer their buffered offer
+      // below with local tracks already attached (sendrecv from the start).
+      await enterCall(false, set, get, ic.from);
+      const queued = pendingCallSignals.get(ic.from) ?? [];
+      pendingCallSignals.delete(ic.from);
+      for (const signal of queued) {
+        await mesh?.handleSignal(ic.from, signal);
+      }
     } catch (err) {
       set({ callError: mediaErrorText(err) });
     }
   },
 
-  /** Decline a ringing call: tear down the caller's connection, keep the mic off. */
+  /** Decline a ringing call: tell the caller we're not answering, keep the mic off. */
   declineCall: () => {
     const ic = get().incomingCall;
     if (!ic) return;
     set({ incomingCall: null });
+    pendingCallSignals.delete(ic.from);
     mesh?.hangup(ic.from);
   },
 
@@ -289,11 +310,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 }));
 
-/** Acquire local media, join the mesh call, and offer media to every peer. */
+/**
+ * Acquire local media, join the mesh call, and offer media to every peer.
+ * `deferPeer`, if given, is skipped here — the caller will instead replay
+ * that peer's buffered offer (see acceptCall) once local tracks already
+ * exist, so the very first answer we send them is sendrecv, not recvonly.
+ */
 async function enterCall(
   withVideo: boolean,
   set: SetState,
   get: () => ChatState,
+  deferPeer?: PeerId,
 ): Promise<void> {
   const { selfId, peers, localStream } = get();
   if (!selfId || !mesh) return;
@@ -309,7 +336,9 @@ async function enterCall(
   });
   for (const track of stream.getTracks()) mesh.addLocalTrack(track, stream);
   // We already hold idle connections to every peer; adding tracks renegotiates.
-  for (const peerId of Object.keys(peers)) mesh.connect(peerId);
+  for (const peerId of Object.keys(peers)) {
+    if (peerId !== deferPeer) mesh.connect(peerId);
+  }
 }
 
 /** Stop local media and clear all call state (does not close the mesh). */
@@ -520,17 +549,30 @@ function handleServerMessage(
     }
     case 'signal': {
       // A caller withdrawing dismisses any ringing prompt from them.
-      if (msg.signal.kind === 'bye' && get().incomingCall?.from === msg.from) {
-        set({ incomingCall: null });
+      if (msg.signal.kind === 'bye') {
+        pendingCallSignals.delete(msg.from);
+        if (get().incomingCall?.from === msg.from) set({ incomingCall: null });
+      }
+      const { inCall, incomingCall } = get();
+      const ringingFromThisPeer = !inCall && incomingCall?.from === msg.from;
+      const isNewIncomingOffer = msg.signal.kind === 'offer' && !inCall && !incomingCall;
+      if (ringingFromThisPeer || isNewIncomingOffer) {
+        // Buffer instead of answering now: creating the RTCPeerConnection and
+        // answering before the user Accepts (i.e. before we have any local
+        // media) leaves that connection recvonly on some browsers even after
+        // media is added later. Hold the offer (and any trickled ICE) until
+        // acceptCall() actually has a mic/camera to answer with.
+        if (msg.signal.kind !== 'bye') {
+          const q = pendingCallSignals.get(msg.from) ?? [];
+          q.push(msg.signal);
+          pendingCallSignals.set(msg.from, q);
+        }
+        if (isNewIncomingOffer) {
+          set((st) => (st.incomingCall ? {} : { incomingCall: { from: msg.from } }));
+        }
+        break;
       }
       void mesh?.handleSignal(msg.from, msg.signal);
-      // An inbound offer while we're not in a call is an INCOMING CALL. Do not
-      // silently acquire the microphone — that would let any room member turn
-      // on the victim's mic. Prompt instead; media is neither played (CallStage
-      // is gated on inCall) nor sent until the user explicitly accepts.
-      if (msg.signal.kind === 'offer' && !get().inCall) {
-        set((st) => (st.incomingCall ? {} : { incomingCall: { from: msg.from } }));
-      }
       break;
     }
     case 'error': {

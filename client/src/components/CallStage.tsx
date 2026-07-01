@@ -1,36 +1,134 @@
 import { useEffect, useRef, useState } from 'react';
 import { useChatStore } from '../store/useChatStore';
 import { Avatar } from './Avatar';
-import { MicOff } from './icons';
+import { Mic, MicOff, Video, VideoOff, PhoneOff, Minimize } from './icons';
 
-/** Grid of video/audio tiles for the active call: yourself + each remote peer. */
-export function CallStage() {
+interface CallStageProps {
+  elapsed: string;
+  /** Shrink down to the compact "return to call" bar. */
+  onMinimize: () => void;
+}
+
+/**
+ * Full-screen WhatsApp-style active call view: one big tile (or a grid for
+ * group calls), a top status bar with a minimize action, and a bottom control
+ * strip. Rendered instead of the compact CallBar while not minimized.
+ */
+export function CallStage({ elapsed, onMinimize }: CallStageProps) {
   const inCall = useChatStore((s) => s.inCall);
   const localStream = useChatStore((s) => s.localStream);
   const remoteStreams = useChatStore((s) => s.remoteStreams);
   const displayName = useChatStore((s) => s.displayName);
   const peers = useChatStore((s) => s.peers);
   const micEnabled = useChatStore((s) => s.micEnabled);
+  const camEnabled = useChatStore((s) => s.camEnabled);
+  const callError = useChatStore((s) => s.callError);
+  const toggleMic = useChatStore((s) => s.toggleMic);
+  const toggleCam = useChatStore((s) => s.toggleCam);
+  const endCall = useChatStore((s) => s.endCall);
 
   if (!inCall) return null;
 
   const entries = Object.entries(remoteStreams);
+  const soloRemote = entries.length === 1 ? entries[0] : null;
+  const you = `${displayName || 'You'} (you)`;
 
   return (
-    <div className="border-b border-wa-border bg-wa-bg p-3">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        <VideoTile
-          stream={localStream}
-          label={`${displayName || 'You'} (you)`}
-          muted
-          mirror
-          micOff={!micEnabled}
-        />
-        {entries.map(([peerId, stream]) => (
-          <VideoTile key={peerId} stream={stream} label={peers[peerId]?.displayName ?? 'Peer'} />
-        ))}
+    <div
+      role="dialog"
+      aria-label="Ongoing call"
+      className="fixed inset-0 z-40 flex animate-pop-in flex-col bg-wa-bg wa-chat-bg"
+    >
+      {/* Top status bar */}
+      <div className="flex items-center gap-3 bg-gradient-to-b from-black/60 to-transparent px-3 pb-6 pt-3 sm:px-4">
+        <button
+          onClick={onMinimize}
+          title="Minimize call"
+          aria-label="Minimize call"
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-black/30 text-white transition hover:bg-black/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-wa-green"
+        >
+          <Minimize className="h-4 w-4" />
+        </button>
+        <span className="flex items-center gap-2 text-sm font-medium text-white">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-wa-green" />
+          Ongoing call · <span className="tabular-nums">{elapsed}</span>
+        </span>
+      </div>
+
+      {/* Video / avatar area */}
+      <div className="relative min-h-0 flex-1 px-3 pb-3 sm:px-4">
+        {soloRemote ? (
+          <div className="relative h-full w-full">
+            <VideoTile
+              stream={soloRemote[1]}
+              label={peers[soloRemote[0]]?.displayName ?? 'Peer'}
+              big
+            />
+            <div className="absolute bottom-3 right-3 h-24 w-16 sm:h-36 sm:w-24">
+              <VideoTile stream={localStream} label={you} muted mirror micOff={!micEnabled} pip />
+            </div>
+          </div>
+        ) : entries.length === 0 ? (
+          <div className="h-full w-full">
+            <VideoTile stream={localStream} label={you} muted mirror micOff={!micEnabled} big caption="Calling…" />
+          </div>
+        ) : (
+          <div className="grid h-full grid-cols-2 gap-2 sm:grid-cols-3">
+            <VideoTile stream={localStream} label={you} muted mirror micOff={!micEnabled} />
+            {entries.map(([peerId, stream]) => (
+              <VideoTile key={peerId} stream={stream} label={peers[peerId]?.displayName ?? 'Peer'} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {callError && (
+        <p className="px-4 pb-1 text-center text-xs text-red-300">{callError}</p>
+      )}
+
+      {/* Bottom controls */}
+      <div className="flex items-center justify-center gap-5 bg-gradient-to-t from-black/60 to-transparent px-4 pb-6 pt-4 sm:gap-6">
+        <ControlButton onClick={toggleMic} off={!micEnabled} title={micEnabled ? 'Mute' : 'Unmute'}>
+          {micEnabled ? <Mic className="h-6 w-6" /> : <MicOff className="h-6 w-6" />}
+        </ControlButton>
+        <ControlButton onClick={() => void toggleCam()} off={!camEnabled} title={camEnabled ? 'Stop video' : 'Start video'}>
+          {camEnabled ? <Video className="h-6 w-6" /> : <VideoOff className="h-6 w-6" />}
+        </ControlButton>
+        <button
+          onClick={endCall}
+          title="Leave call"
+          aria-label="Leave call"
+          className="flex h-14 w-14 items-center justify-center rounded-full bg-red-500 text-white shadow-lg transition hover:bg-red-400 active:scale-95"
+        >
+          <PhoneOff className="h-6 w-6" />
+        </button>
       </div>
     </div>
+  );
+}
+
+function ControlButton({
+  onClick,
+  children,
+  title,
+  off,
+}: {
+  onClick: () => void;
+  children: React.ReactNode;
+  title: string;
+  off?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className={`flex h-14 w-14 items-center justify-center rounded-full shadow-lg transition active:scale-95 ${
+        off ? 'bg-white/90 text-wa-header' : 'bg-white/15 text-white hover:bg-white/25'
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -40,9 +138,15 @@ interface VideoTileProps {
   muted?: boolean;
   mirror?: boolean;
   micOff?: boolean;
+  /** Fills the container without the rounded/ring "tile" chrome — used for the single big tile. */
+  big?: boolean;
+  /** Small picture-in-picture styling for the local preview during a 1:1 call. */
+  pip?: boolean;
+  /** Optional status caption shown under the avatar when there's no video (e.g. "Calling…"). */
+  caption?: string;
 }
 
-function VideoTile({ stream, label, muted = false, mirror = false, micOff = false }: VideoTileProps) {
+function VideoTile({ stream, label, muted = false, mirror = false, micOff = false, big = false, pip = false, caption }: VideoTileProps) {
   const ref = useRef<HTMLVideoElement>(null);
   const hasVideo = useStreamHasVideo(stream);
 
@@ -52,7 +156,15 @@ function VideoTile({ stream, label, muted = false, mirror = false, micOff = fals
   }, [stream]);
 
   return (
-    <div className="group relative aspect-video animate-pop-in overflow-hidden rounded-xl bg-black ring-1 ring-wa-border transition hover:ring-wa-green/40">
+    <div
+      className={`group relative h-full w-full overflow-hidden bg-black ring-1 ring-wa-border transition ${
+        big
+          ? 'rounded-none sm:rounded-xl'
+          : pip
+            ? 'animate-pop-in rounded-lg shadow-xl ring-white/20'
+            : 'aspect-video animate-pop-in rounded-xl hover:ring-wa-green/40'
+      }`}
+    >
       <video
         ref={ref}
         autoPlay
@@ -63,18 +175,26 @@ function VideoTile({ stream, label, muted = false, mirror = false, micOff = fals
         }`}
       />
       {!hasVideo && (
-        <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-wa-header to-wa-bg">
-          <Avatar name={label} size="lg" />
+        <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-wa-header to-wa-bg">
+          <Avatar name={label} size={pip ? 'sm' : big ? 'lg' : 'md'} />
+          {caption && !pip && <p className="text-sm text-wa-secondary">{caption}</p>}
         </div>
       )}
-      <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/75 to-transparent px-2 py-1.5">
-        {micOff && (
-          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-red-500/90 text-white">
-            <MicOff className="h-2.5 w-2.5" />
-          </span>
-        )}
-        <span className="truncate text-xs font-medium text-white">{label}</span>
-      </div>
+      {!pip && (
+        <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/75 to-transparent px-2 py-1.5">
+          {micOff && (
+            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-red-500/90 text-white">
+              <MicOff className="h-2.5 w-2.5" />
+            </span>
+          )}
+          <span className="truncate text-xs font-medium text-white">{label}</span>
+        </div>
+      )}
+      {pip && micOff && (
+        <span className="absolute bottom-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500/90 text-white">
+          <MicOff className="h-2.5 w-2.5" />
+        </span>
+      )}
     </div>
   );
 }
