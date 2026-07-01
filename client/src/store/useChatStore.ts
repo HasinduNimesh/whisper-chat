@@ -378,6 +378,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
  * that peer's buffered offer (see acceptCall) once local tracks already
  * exist, so the very first answer we send them is sendrecv, not recvonly.
  */
+/** True for the "no device of this kind exists" family of getUserMedia errors. */
+function isNoDeviceError(err: unknown): boolean {
+  return err instanceof DOMException && (err.name === 'NotFoundError' || err.name === 'OverconstrainedError');
+}
+
+/**
+ * Acquire call media, falling back to whatever's actually available instead
+ * of failing the whole call when just one device type is missing — e.g. a
+ * desktop with a working camera but no microphone the OS recognizes at all.
+ * Requesting {audio:true, video:true} fails outright if EITHER is absent,
+ * even though the other might work fine; retry with just the piece that
+ * failed dropped, in both directions, before giving up entirely.
+ */
+async function acquireCallMedia(withVideo: boolean): Promise<{ stream: MediaStream; degraded: string | null }> {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
+    return { stream, degraded: null };
+  } catch (err) {
+    if (!isNoDeviceError(err)) throw err; // permission denied etc. — nothing to gracefully degrade to
+    if (withVideo) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+        return { stream, degraded: "No microphone found — joined with video only, they won't hear you." };
+      } catch (videoOnlyErr) {
+        if (!isNoDeviceError(videoOnlyErr)) throw videoOnlyErr;
+        // Camera itself must be the missing piece — fall back to audio-only.
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        return { stream, degraded: 'No camera found — joined with audio only.' };
+      }
+    }
+    throw err; // voice call with no mic — nothing sensible to fall back to
+  }
+}
+
 async function enterCall(
   withVideo: boolean,
   set: SetState,
@@ -388,13 +422,13 @@ async function enterCall(
   if (!selfId || !mesh) return;
   if (localStream) return; // already in a call
 
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
+  const { stream, degraded } = await acquireCallMedia(withVideo);
   set({
     inCall: true,
-    micEnabled: true,
-    camEnabled: withVideo,
+    micEnabled: stream.getAudioTracks().length > 0,
+    camEnabled: stream.getVideoTracks().length > 0,
     localStream: stream,
-    callError: null,
+    callError: degraded,
   });
   for (const track of stream.getTracks()) mesh.addLocalTrack(track, stream);
   // We already hold idle connections to every ONLINE peer; adding tracks

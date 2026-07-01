@@ -14,10 +14,13 @@ interface CallBarProps {
 export function CallBar({ elapsed, onExpand }: CallBarProps) {
   const micEnabled = useChatStore((s) => s.micEnabled);
   const camEnabled = useChatStore((s) => s.camEnabled);
+  const localStream = useChatStore((s) => s.localStream);
   const callError = useChatStore((s) => s.callError);
   const toggleMic = useChatStore((s) => s.toggleMic);
   const toggleCam = useChatStore((s) => s.toggleCam);
   const endCall = useChatStore((s) => s.endCall);
+  // Distinguish "no microphone at all" (nothing to toggle) from "muted."
+  const hasMicTrack = (localStream?.getAudioTracks().length ?? 0) > 0;
 
   return (
     <div className="flex flex-col gap-1 bg-wa-green-dark px-4 py-2 text-white">
@@ -35,7 +38,12 @@ export function CallBar({ elapsed, onExpand }: CallBarProps) {
         </button>
 
         <div className="ml-auto flex items-center gap-2">
-          <RoundButton onClick={toggleMic} off={!micEnabled} title={micEnabled ? 'Mute' : 'Unmute'}>
+          <RoundButton
+            onClick={toggleMic}
+            off={!micEnabled}
+            disabled={!hasMicTrack}
+            title={!hasMicTrack ? 'No microphone found' : micEnabled ? 'Mute' : 'Unmute'}
+          >
             {micEnabled ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
           </RoundButton>
           <RoundButton onClick={() => void toggleCam()} title={camEnabled ? 'Stop video' : 'Start video'}>
@@ -63,18 +71,21 @@ function RoundButton({
   children,
   title,
   off,
+  disabled,
 }: {
   onClick: () => void;
   children: React.ReactNode;
   title: string;
   off?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       title={title}
       aria-label={title}
-      className={`flex h-8 w-8 items-center justify-center rounded-full transition ${
+      className={`flex h-8 w-8 items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-40 ${
         off ? 'bg-white/90 text-wa-green-dark' : 'bg-white/15 text-white hover:bg-white/25'
       }`}
     >

@@ -42,6 +42,8 @@ export function CallStage({ elapsed, onMinimize }: CallStageProps) {
   // A voice-only call can grow past VIDEO_CALL_MAX_PEERS; don't let turning
   // video on at that size silently push a full video mesh onto everyone.
   const videoBlockedBySize = !camEnabled && entries.length + 1 > VIDEO_CALL_MAX_PEERS;
+  // Distinguish "no microphone at all" (nothing to toggle) from "muted."
+  const hasMicTrack = (localStream?.getAudioTracks().length ?? 0) > 0;
 
   return (
     <div
@@ -98,7 +100,12 @@ export function CallStage({ elapsed, onMinimize }: CallStageProps) {
 
       {/* Bottom controls */}
       <div className="flex items-center justify-center gap-5 bg-gradient-to-t from-black/60 to-transparent px-4 pb-6 pt-4 sm:gap-6">
-        <ControlButton onClick={toggleMic} off={!micEnabled} title={micEnabled ? 'Mute' : 'Unmute'}>
+        <ControlButton
+          onClick={toggleMic}
+          off={!micEnabled}
+          disabled={!hasMicTrack}
+          title={!hasMicTrack ? 'No microphone found' : micEnabled ? 'Mute' : 'Unmute'}
+        >
           {micEnabled ? <Mic className="h-6 w-6" /> : <MicOff className="h-6 w-6" />}
         </ControlButton>
         <ControlButton
