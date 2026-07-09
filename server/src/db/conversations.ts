@@ -279,6 +279,27 @@ export async function listParticipants(
   return res.rows.map(toParticipant);
 }
 
+/** Participants for many conversations in one query (inbox rendering). */
+export async function listParticipantsForConversations(
+  orgId: string,
+  conversationIds: string[],
+): Promise<Map<string, Participant[]>> {
+  const byConv = new Map<string, Participant[]>();
+  if (conversationIds.length === 0) return byConv;
+  const res = await requirePool().query<ParticipantRow>(
+    `SELECT ${PART_COLUMNS} FROM conversation_participants
+     WHERE org_id = $1 AND conversation_id = ANY($2::uuid[])
+     ORDER BY created_at ASC`,
+    [orgId, conversationIds],
+  );
+  for (const row of res.rows) {
+    const list = byConv.get(row.conversation_id) ?? [];
+    list.push(toParticipant(row));
+    byConv.set(row.conversation_id, list);
+  }
+  return byConv;
+}
+
 export async function getParticipant(
   orgId: string,
   conversationId: string,
