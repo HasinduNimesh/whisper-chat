@@ -37,7 +37,7 @@ import {
   claimHandle,
   lookupHandle,
   HandlesUnavailableError,
-} from './db.js';
+} from './db/index.js';
 
 const PORT = Number(process.env.PORT ?? 8787);
 // Bind address. Default (unset) listens on all interfaces — good for LAN/dev.

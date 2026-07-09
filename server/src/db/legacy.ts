@@ -1,7 +1,9 @@
 /**
- * Optional persistence layer (Postgres via `pg`). Entirely gated on
- * DATABASE_URL — if it's unset, every export here is a no-op and the app
- * behaves exactly as it does without a database (in-memory only, no history).
+ * Persistence for the original private-chat app: durable room membership,
+ * per-recipient ciphertext history, and the @handle directory. Everything
+ * here degrades gracefully without DATABASE_URL (no-ops / empty results),
+ * except the handle directory which throws `HandlesUnavailableError` —
+ * there's nothing sensible to degrade a standing global lookup to.
  *
  * The server only ever stores opaque ciphertext + routing metadata (room id,
  * sender/recipient public keys, display-name snapshots, timestamps) — never
@@ -10,91 +12,11 @@
  * forgotten immediately, which is an explicit, accepted tradeoff for
  * cross-device + offline history.
  */
-import pg from 'pg';
+import type pg from 'pg';
 import type { HistoryEntry, RoomMember } from '@private-chat/shared';
+import { getPool, HandlesUnavailableError } from './pool.js';
 
 const HISTORY_LIMIT = 200;
-
-/**
- * pg-connection-string currently treats sslmode=require/prefer/verify-ca as
- * aliases for verify-full, but warns on every connection that a future major
- * version will switch them to weaker, standard-libpq semantics. That warning
- * fires purely off the string (an explicit `ssl` Pool option doesn't
- * suppress it), so normalize to the unambiguous verify-full here — pins us
- * to today's (correct, cert-verifying) behavior regardless of that future
- * change, and stops the noisy per-connection warning in the logs.
- */
-function normalizeSslMode(url: string): string {
-  try {
-    const parsed = new URL(url);
-    if (['require', 'prefer', 'verify-ca'].includes(parsed.searchParams.get('sslmode') ?? '')) {
-      parsed.searchParams.set('sslmode', 'verify-full');
-    }
-    return parsed.toString();
-  } catch {
-    return url; // malformed URL — let `pg` itself surface the real error
-  }
-}
-
-const DATABASE_URL = process.env.DATABASE_URL ? normalizeSslMode(process.env.DATABASE_URL) : undefined;
-
-let pool: pg.Pool | null = null;
-let initPromise: Promise<void> | null = null;
-
-function getPool(): pg.Pool | null {
-  if (!DATABASE_URL) return null;
-  if (!pool) pool = new pg.Pool({ connectionString: DATABASE_URL });
-  return pool;
-}
-
-/** Create tables if missing. Safe to call repeatedly (idempotent DDL). */
-export function initDb(): Promise<void> {
-  const p = getPool();
-  if (!p) return Promise.resolve();
-  if (!initPromise) {
-    initPromise = p
-      .query(
-        `
-        CREATE TABLE IF NOT EXISTS room_members (
-          room_id       TEXT NOT NULL,
-          public_key    TEXT NOT NULL,
-          display_name  TEXT NOT NULL,
-          first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-          last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-          PRIMARY KEY (room_id, public_key)
-        );
-
-        CREATE TABLE IF NOT EXISTS messages (
-          id                   BIGSERIAL PRIMARY KEY,
-          room_id              TEXT NOT NULL,
-          recipient_public_key TEXT NOT NULL,
-          sender_public_key    TEXT NOT NULL,
-          sender_display_name  TEXT NOT NULL,
-          ciphertext           TEXT NOT NULL,
-          nonce                TEXT NOT NULL,
-          sent_at              BIGINT NOT NULL, -- ms, server receipt time (relay carries no client timestamp; the true send time is inside the encrypted payload, invisible to us)
-          inserted_at          TIMESTAMPTZ NOT NULL DEFAULT now()
-        );
-
-        CREATE INDEX IF NOT EXISTS messages_recipient_idx
-          ON messages (room_id, recipient_public_key, inserted_at);
-
-        CREATE TABLE IF NOT EXISTS handles (
-          handle       TEXT PRIMARY KEY,
-          public_key   TEXT NOT NULL UNIQUE,
-          display_name TEXT NOT NULL,
-          claimed_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-        );
-        `,
-      )
-      .then(() => undefined)
-      .catch((err) => {
-        console.error('[db] schema init failed', err);
-        throw err;
-      });
-  }
-  return initPromise;
-}
 
 /** Record (or refresh) a room's durable membership — survives disconnects. */
 export async function upsertRoomMember(
@@ -192,19 +114,7 @@ export async function fetchHistory(
   }));
 }
 
-/**
- * Unlike everything else in this file, the @handle directory has no
- * in-memory fallback — there's nothing sensible to "degrade" to, since the
- * whole point is a standing, globally-queryable lookup. Callers should catch
- * this and surface a clear "not set up" response rather than a generic error.
- */
-export class HandlesUnavailableError extends Error {
-  constructor() {
-    super('Handle directory requires DATABASE_URL to be configured');
-  }
-}
-
-function requirePool(): pg.Pool {
+function requireHandlesPool(): pg.Pool {
   const p = getPool();
   if (!p) throw new HandlesUnavailableError();
   return p;
@@ -215,8 +125,12 @@ function requirePool(): pg.Pool {
  * held. Returns false (never throws for this case) if the handle is already
  * taken by a different key — first writer wins on the race.
  */
-export async function claimHandle(handle: string, publicKey: string, displayName: string): Promise<boolean> {
-  const p = requirePool();
+export async function claimHandle(
+  handle: string,
+  publicKey: string,
+  displayName: string,
+): Promise<boolean> {
+  const p = requireHandlesPool();
   const client = await p.connect();
   try {
     await client.query('BEGIN');
@@ -237,8 +151,10 @@ export async function claimHandle(handle: string, publicKey: string, displayName
   }
 }
 
-export async function lookupHandle(handle: string): Promise<{ publicKey: string; displayName: string } | null> {
-  const p = requirePool();
+export async function lookupHandle(
+  handle: string,
+): Promise<{ publicKey: string; displayName: string } | null> {
+  const p = requireHandlesPool();
   const res = await p.query<{ public_key: string; display_name: string }>(
     'SELECT public_key, display_name FROM handles WHERE handle = $1',
     [handle],
