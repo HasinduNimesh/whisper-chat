@@ -120,7 +120,7 @@ variables live in [`client/.env.example`](client/.env.example).
 | **LAN (other devices)** | `HTTPS=1 npm run dev:client`, open `https://<your-ip>:5173` and accept the self-signed cert. |
 | **Production (your server)** | nginx serves the built client + proxies `/signaling` to the Node server, with Let's Encrypt TLS and systemd. See [`deploy/README.md`](deploy/README.md). |
 | **Render + Vercel (managed)** | Server on Render, client on Vercel, as two origins. See [`DEPLOYMENT.md`](DEPLOYMENT.md). |
-| **Docker** | Coming next on the roadmap — one `docker compose up` for server + Postgres + client. |
+| **Docker (recommended)** | `docker compose up -d --build` → full stack (Postgres + server + client) on one origin. See [`docs/self-hosting.md`](docs/self-hosting.md). |
 
 The client targets same-origin `wss://<host>/signaling` automatically, so no
 signaling env var is needed when a tunnel/nginx fronts both. Override with
@@ -149,7 +149,7 @@ Whisper is growing from a private chat app into an **organization-ready,
 self-hostable customer-messaging platform**. Planned, in order:
 
 - [x] Private E2E rooms, voice/video calls, handles/contacts, optional history
-- [ ] **Docker self-hosting** — one-command `docker compose up` (server + Postgres + client)
+- [x] **Docker self-hosting** — one-command `docker compose up` (server + Postgres + client)
 - [ ] **Multi-tenant organizations** — orgs, admin/agent roles, invites
 - [ ] **Per-org encryption mode** — orgs choose full **E2E** conversations *or*
       server-readable **managed** conversations (enables shared inboxes,

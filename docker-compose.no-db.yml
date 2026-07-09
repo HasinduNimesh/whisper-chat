@@ -1,0 +1,28 @@
+# Whisper — DB-less stack: signaling server + web client, no Postgres.
+#
+#   docker compose -f docker-compose.no-db.yml up -d --build
+#   → open http://localhost:8080
+#
+# In this mode the server is fully in-memory and stateless: no message
+# history, no @handle directory, nothing persisted — maximum privacy.
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment:
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080}
+      METERED_API_KEY: ${METERED_API_KEY:-}
+      METERED_DOMAIN: ${METERED_DOMAIN:-}
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    ports:
+      - '${WEB_PORT:-8080}:80'
+    depends_on:
+      - server
+    restart: unless-stopped
