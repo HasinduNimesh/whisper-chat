@@ -1,14 +1,32 @@
 /**
  * Shared protocol types between the client and the signaling/relay server.
  *
- * PRIVACY INVARIANT: The server only ever sees ciphertext and routing metadata
- * (room id, peer ids, public keys, WebRTC SDP/ICE). It never sees message
- * plaintext. Any field carrying user content here is an opaque base64 blob that
- * was sealed client-side with libsodium before transmission.
+ * PRIVACY INVARIANT — scoped by trust model:
+ *
+ * 1. LEGACY ROOMS ('join'/'relay') and E2E CONVERSATIONS: the server only
+ *    ever sees ciphertext and routing metadata (room/conversation id, peer
+ *    ids, public keys, WebRTC SDP/ICE). It never sees message plaintext. Any
+ *    field carrying user content is an opaque base64 blob sealed client-side
+ *    with libsodium before transmission, and the server enforces that no
+ *    plaintext frame type ('send') is accepted in these contexts.
+ *
+ * 2. MANAGED CONVERSATIONS (an organization's explicit, at-creation choice):
+ *    message text travels in plaintext frames ('send'/'message') and is
+ *    stored server-side — that is the feature (shared agent inbox, handoff,
+ *    org-controlled history). The org self-hosting the server owns that data.
+ *    The server enforces the inverse here: sealed 'relay' frames are
+ *    rejected, so a conversation can never silently mix trust models.
  */
 
 export const ROOM_MIN_PEERS = 2;
 export const ROOM_MAX_PEERS = 30;
+
+/**
+ * Room ids beginning with this prefix are reserved (conversations are
+ * addressed by their own message types, never as legacy rooms). The server
+ * rejects legacy 'join' for them.
+ */
+export const RESERVED_ROOM_PREFIX = 'conv:';
 
 /**
  * Calls use full-mesh WebRTC (every participant connects directly to every
@@ -45,7 +63,10 @@ export type ClientMessage =
   | JoinRoomMessage
   | LeaveRoomMessage
   | RelayMessage
-  | SignalMessage;
+  | SignalMessage
+  | JoinConversationMessage
+  | SendTextMessage
+  | JoinInboxMessage;
 
 /** Ask to join (or create) a room and advertise our public identity. */
 export interface JoinRoomMessage {
@@ -89,6 +110,46 @@ export interface SignalMessage {
   signal: RtcSignal;
 }
 
+/* --- Organization conversations (customer chat) --------------------- */
+
+/** How a socket proves it may join a conversation. */
+export type ConversationAuth =
+  /** Dashboard staff: the session cookie already sent on the WS upgrade. */
+  | { kind: 'session' }
+  /** Anonymous B2C widget visitor. */
+  | { kind: 'visitor'; orgSlug: string; secret: string }
+  /** Store/marketplace-signed identity token (C2C / identified B2C). */
+  | { kind: 'org-token'; token: string };
+
+/**
+ * Join an org conversation (created beforehand via the REST API). The server
+ * authenticates, authorizes membership, and answers 'conversation-joined'.
+ */
+export interface JoinConversationMessage {
+  type: 'join-conversation';
+  conversationId: string;
+  auth: ConversationAuth;
+  /** E2E conversations only: our X25519 public key so peers can seal to us. */
+  publicKey?: string;
+}
+
+/**
+ * Plaintext message in a MANAGED conversation (the org's explicit choice —
+ * see the invariant at the top). Rejected with 'wrong-mode' anywhere else.
+ */
+export interface SendTextMessage {
+  type: 'send';
+  text: string;
+}
+
+/**
+ * Dashboard staff: subscribe this socket to org-wide inbox events
+ * (new/updated conversations) using the session cookie from the upgrade.
+ */
+export interface JoinInboxMessage {
+  type: 'join-inbox';
+}
+
 /* ------------------------------------------------------------------ */
 /* Server -> Client messages                                           */
 /* ------------------------------------------------------------------ */
@@ -99,7 +160,12 @@ export type ServerMessage =
   | PeerLeftMessage
   | DeliverMessage
   | SignalDeliverMessage
-  | ErrorMessage;
+  | ErrorMessage
+  | ConversationJoinedMessage
+  | ConversationMessageEvent
+  | ConversationPeerEvent
+  | InboxJoinedMessage
+  | InboxEventMessage;
 
 /** Sent to a client right after a successful join. */
 export interface JoinedMessage {
@@ -177,6 +243,73 @@ export interface SignalDeliverMessage {
   signal: RtcSignal;
 }
 
+/* --- Organization conversations: server events ---------------------- */
+
+export type ConversationParticipantKind = 'agent' | 'visitor' | 'external';
+
+/** A conversation participant as seen on the wire. */
+export interface ConversationPeer {
+  participantId: string;
+  kind: ConversationParticipantKind;
+  displayName: string;
+  /** E2E conversations only. */
+  publicKey: string | null;
+  online: boolean;
+}
+
+/** Answer to 'join-conversation'. */
+export interface ConversationJoinedMessage {
+  type: 'conversation-joined';
+  conversationId: string;
+  selfParticipantId: string;
+  conversation: {
+    kind: 'b2c' | 'c2c';
+    encryption: 'e2e' | 'managed';
+    status: 'open' | 'closed';
+    context: Record<string, unknown> | null;
+  };
+  participants: ConversationPeer[];
+  /** Managed conversations: plaintext history, oldest first. */
+  history?: ConversationMessageEvent[];
+  /** E2E conversations: sealed history addressed to our key, oldest first. */
+  e2eHistory?: HistoryEntry[];
+  iceServers: IceServerLike[];
+}
+
+/** A managed-mode message, live or replayed as history. */
+export interface ConversationMessageEvent {
+  type: 'message';
+  conversationId: string;
+  /** Server-assigned message id (stable, for dedupe). */
+  id: string;
+  from: {
+    participantId: string;
+    kind: ConversationParticipantKind;
+    displayName: string;
+  };
+  text: string;
+  sentAt: number;
+}
+
+/** Presence/roster change inside a conversation. */
+export interface ConversationPeerEvent {
+  type: 'conversation-peer';
+  conversationId: string;
+  peer: ConversationPeer;
+}
+
+/** Answer to 'join-inbox'. */
+export interface InboxJoinedMessage {
+  type: 'inbox-joined';
+}
+
+/** Org-wide inbox notification for dashboard staff. */
+export interface InboxEventMessage {
+  type: 'inbox-event';
+  event: 'new-conversation' | 'message';
+  conversationId: string;
+}
+
 export interface ErrorMessage {
   type: 'error';
   code: ErrorCode;
@@ -187,7 +320,13 @@ export type ErrorCode =
   | 'room-full'
   | 'invalid-room'
   | 'not-in-room'
-  | 'bad-request';
+  | 'bad-request'
+  /** Conversation auth failed or you're not a participant. */
+  | 'unauthorized'
+  /** Frame type doesn't match the conversation's encryption mode. */
+  | 'wrong-mode'
+  /** The conversation is closed; reopen it (agent) before sending. */
+  | 'conversation-closed';
 
 /* ------------------------------------------------------------------ */
 /* WebRTC signal envelope                                              */
