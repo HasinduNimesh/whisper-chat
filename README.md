@@ -1,29 +1,36 @@
-# 🔒 Whisper — Private E2E-Encrypted Chat & Calls
+# 🔒 Whisper — Open-Source, Self-Hostable Private Chat & Customer Messaging
 
-A high-privacy, **WhatsApp-style** web app for **2–4 people** with end-to-end
-encrypted text messaging and peer-to-peer **voice/video calls** (WebRTC mesh,
-DTLS-SRTP). The server only ever relays **ciphertext** and connection metadata —
-it can never read your messages or media.
+Whisper is a **self-hostable chat platform** built on end-to-end encryption. Today
+it ships a high-privacy **WhatsApp-style** web app for private rooms with E2E
+text messaging and peer-to-peer **voice/video calls** (WebRTC mesh, DTLS-SRTP).
+It is evolving into a full **customer-chat platform for organizations** — an
+embeddable widget for online stores and marketplaces, with agent inboxes,
+supporting both **B2C** (customer ↔ store agents) and **C2C** (buyer ↔ seller)
+conversations. See the [Roadmap](#%EF%B8%8F-roadmap).
 
-> No accounts. No phone numbers. No message history on the server. Just share a
-> room code and talk.
+> No accounts. No phone numbers. No message history on the server (unless you
+> opt in). Just share a room code and talk — or self-host it for your whole org.
 
 ---
 
-## ✨ Features
+## ✨ Features (today)
 
 - 🔐 **End-to-end encryption** — every message is sealed per-recipient with
   libsodium `crypto_box` (X25519 + XSalsa20-Poly1305); only the intended peer can
   open it, and the sender is cryptographically authenticated.
-- 📞 **Voice & video calls** — direct peer-to-peer WebRTC mesh for up to 4 people,
-  with mute, camera toggle, and a live call timer. Peers auto-join an active call.
-- ✍️ **Typing indicators** — see when others are typing (sent over the same
-  encrypted channel — the server never learns who's typing).
-- 🛡️ **Safety numbers** — deterministic, comparable fingerprints to detect a
-  man-in-the-middle.
-- 💬 **WhatsApp-style UI** — dark theme, chat wallpaper, grouped bubbles with
-  tails, read-receipt ticks, presence, gradient avatars, and a polished join flow.
-- 🕸️ **Tiny, stateless server** — in-memory rooms only; nothing is persisted.
+- 📞 **Voice & video calls** — direct peer-to-peer WebRTC mesh (video up to 4,
+  voice up to 20), with mute, camera toggle/swap, and a live call timer.
+- ✍️ **Typing indicators** — sent over the same encrypted channel; the server
+  never learns who's typing.
+- 🛡️ **Safety numbers + TOFU key pinning** — deterministic, comparable
+  fingerprints to detect a man-in-the-middle; key changes raise a loud alert.
+- 🪪 **@handles & contacts** — optional public handle directory and client-side
+  contacts with deterministic 1:1 rooms.
+- 🗄️ **Optional history** — point the server at Postgres and it stores
+  *ciphertext only* for cross-device/offline history; without a database it is
+  fully in-memory and stateless.
+- 💬 **WhatsApp-style UI** — dark theme, grouped bubbles, read-receipt ticks,
+  presence, gradient avatars, polished join flow.
 
 ## 🏗️ Architecture
 
@@ -35,8 +42,8 @@ Client A ──ciphertext + SDP/ICE──▶  Signaling Server  ──▶ Client
 - **`client/`** — React + TypeScript + Vite web app. Does **all** encryption
   locally; plaintext and private keys never leave the device.
 - **`server/`** — Minimal Node WebSocket signaling/relay server. Assigns peer
-  ids, manages 2–4 room membership, and forwards opaque ciphertext + WebRTC
-  signaling. Ciphertext only.
+  ids, manages room membership, and forwards opaque ciphertext + WebRTC
+  signaling. Optional Postgres persistence (ciphertext only).
 - **`shared/`** — TypeScript protocol types shared by both, with the privacy
   invariant documented inline.
 
@@ -44,10 +51,9 @@ Client A ──ciphertext + SDP/ICE──▶  Signaling Server  ──▶ Client
 
 - Each device generates an **X25519 identity keypair** (libsodium `crypto_box`).
 - Messages (and typing signals) are sealed **per-recipient** with authenticated
-  public-key encryption (X25519 + XSalsa20-Poly1305), so only the intended peer
-  can open them and the sender is authenticated.
-- **Safety numbers** let two people confirm there is no man-in-the-middle on the
-  key exchange.
+  public-key encryption (X25519 + XSalsa20-Poly1305).
+- **Safety numbers** + **TOFU pinning** let people confirm there is no
+  man-in-the-middle on the key exchange.
 - Decryption/auth failures **fail closed** (the frame is dropped silently).
 
 > **Privacy invariant:** the signaling server only ever sees ciphertext and
@@ -61,7 +67,7 @@ Client A ──ciphertext + SDP/ICE──▶  Signaling Server  ──▶ Client
 | Client | React 18, TypeScript, Vite, Tailwind CSS, Zustand |
 | Crypto | libsodium (`libsodium-wrappers`) |
 | Realtime | WebRTC (mesh, perfect negotiation), WebSocket signaling |
-| Server | Node.js, `ws` |
+| Server | Node.js, `ws`, optional Postgres (`pg`) |
 | Tests | Vitest |
 
 ## 📁 Project structure
@@ -69,21 +75,23 @@ Client A ──ciphertext + SDP/ICE──▶  Signaling Server  ──▶ Client
 ```
 .
 ├── client/                 # React + Vite web app (all crypto runs here)
-│   ├── src/
-│   │   ├── components/      # UI: ChatHeader, Sidebar, MessageList, Composer, CallBar, CallStage…
-│   │   ├── views/           # JoinRoom, Room
-│   │   ├── crypto/          # libsodium identity, seal/open, safety numbers (+ tests)
-│   │   ├── rtc/             # WebRTC mesh / perfect negotiation (+ tests)
-│   │   ├── signaling/       # typed WebSocket client
-│   │   ├── store/           # Zustand store: connection, messages, calls, typing
-│   │   └── lib/             # avatar colors, typing labels
-├── server/                 # WebSocket signaling/relay (in-memory rooms)
+│   └── src/
+│       ├── components/      # UI: ChatHeader, Sidebar, MessageList, Composer, CallBar…
+│       ├── views/           # JoinRoom, Room
+│       ├── crypto/          # libsodium identity, seal/open, safety numbers (+ tests)
+│       ├── rtc/             # WebRTC mesh / perfect negotiation (+ tests)
+│       ├── signaling/       # typed WebSocket client
+│       ├── store/           # Zustand store: connection, messages, calls, typing
+│       └── lib/             # avatar colors, handles, typing labels
+├── server/                 # WebSocket signaling/relay (+ optional Postgres)
 ├── shared/                 # Shared protocol types
 ├── deploy/                 # nginx config + systemd unit + deploy runbook
-└── .claude/agents/         # Project AI agents (UX, security, quality, deploy)
+└── .github/workflows/      # CI (lint + build + test)
 ```
 
 ## 🚀 Getting started
+
+Requires **Node.js 20+**.
 
 ```bash
 npm install            # install all workspaces
@@ -93,20 +101,26 @@ npm run dev:client     # terminal 2 — Vite dev server on :5173
 ```
 
 Open <http://localhost:5173> in two or more tabs/browsers, enter the **same room
-code**, and start chatting. Hit **Voice** or **Video** to start a call — peers in
-the room auto-join, and you can mute or toggle your camera mid-call.
+code**, and start chatting. Hit **Voice** or **Video** to start a call.
 
 > Browsers only grant mic/camera access on `localhost` or over **HTTPS**. For LAN
 > testing serve the client over HTTPS with `HTTPS=1 npm run dev:client`.
 
-## 🌍 Share it / deploy
+### ⚙️ Configuration
+
+All server configuration is via environment variables — see
+[`.env.example`](.env.example) for the full annotated list. Client build-time
+variables live in [`client/.env.example`](client/.env.example).
+
+## 🌍 Self-hosting / deployment
 
 | Goal | How |
 |---|---|
-| **Quick public link** | Run server + client, then `cloudflared tunnel --url http://localhost:5173` (or `ngrok http 5173`). One origin, HTTPS, calls work. Link lives while your machine runs. |
+| **Quick public link** | Run server + client, then `cloudflared tunnel --url http://localhost:5173` (or `ngrok http 5173`). One origin, HTTPS, calls work. |
 | **LAN (other devices)** | `HTTPS=1 npm run dev:client`, open `https://<your-ip>:5173` and accept the self-signed cert. |
 | **Production (your server)** | nginx serves the built client + proxies `/signaling` to the Node server, with Let's Encrypt TLS and systemd. See [`deploy/README.md`](deploy/README.md). |
-| **Render + Vercel (managed, no server to babysit)** | Server on Render, client on Vercel, as two origins. See [`DEPLOYMENT.md`](DEPLOYMENT.md). |
+| **Render + Vercel (managed)** | Server on Render, client on Vercel, as two origins. See [`DEPLOYMENT.md`](DEPLOYMENT.md). |
+| **Docker** | Coming next on the roadmap — one `docker compose up` for server + Postgres + client. |
 
 The client targets same-origin `wss://<host>/signaling` automatically, so no
 signaling env var is needed when a tunnel/nginx fronts both. Override with
@@ -114,10 +128,9 @@ signaling env var is needed when a tunnel/nginx fronts both. Override with
 
 ### 📡 Reliable calls across networks (TURN)
 
-STUN alone can't traverse strict/mobile NATs. To make calls connect for everyone,
-copy `client/.env.example` → `client/.env.local`, add TURN credentials (a free
-testing option is documented there), and rebuild/restart the client. The client
-adds them to its WebRTC ICE config automatically.
+STUN alone can't traverse strict/mobile NATs. Either set `METERED_API_KEY` +
+`METERED_DOMAIN` on the server (credentials are minted per-join and never baked
+into the bundle), or configure static TURN via `client/.env.example`.
 
 ## 🧪 Scripts
 
@@ -125,42 +138,46 @@ adds them to its WebRTC ICE config automatically.
 |---|---|
 | `npm run dev:server` | Run the signaling server (hot reload) |
 | `npm run dev:client` | Run the web client (hot reload) |
-| `npm test` | Run client unit tests (Vitest) |
+| `npm test` | Run unit tests (Vitest) |
 | `npm run lint` | Lint all workspaces |
 | `npm run build` | Type-check + build all workspaces |
 | `npm run format` | Prettier across the repo |
 
-## ✅ Testing
+## 🗺️ Roadmap
 
-Unit tests cover the security-critical pure logic — the crypto round-trip /
-tamper rejection / safety numbers, and the WebRTC perfect-negotiation tie-break:
+Whisper is growing from a private chat app into an **organization-ready,
+self-hostable customer-messaging platform**. Planned, in order:
 
-```bash
-npm test
-```
+- [x] Private E2E rooms, voice/video calls, handles/contacts, optional history
+- [ ] **Docker self-hosting** — one-command `docker compose up` (server + Postgres + client)
+- [ ] **Multi-tenant organizations** — orgs, admin/agent roles, invites
+- [ ] **Per-org encryption mode** — orgs choose full **E2E** conversations *or*
+      server-readable **managed** conversations (enables shared inboxes,
+      agent handoff, and history the org controls)
+- [ ] **Store & marketplace integration** — signed-token identity (HMAC JWT) so
+      a shop or marketplace backend can securely tell Whisper who is talking:
+      **B2C** (visitor/customer ↔ the org's agents) and **C2C**
+      (buyer ↔ seller about a listing)
+- [ ] **Agent dashboard** — login, shared inbox, assignment, conversation view
+- [ ] **Embeddable widget** — one `<script>` tag adds a floating chat bubble
+      (iframe-isolated) to any store, plus a documented JS API
 
-## 🤖 Project agents
+### Non-goals for v1 (deliberately deferred)
 
-`.claude/agents/` ships four task-specific [Claude Code](https://claude.com/claude-code)
-subagents tailored to this codebase: `ux-ui-engineer`, `security-auditor`,
-`code-quality-reviewer`, and `deployment-engineer`.
+Email/SMTP sending, chatbots/auto-replies, file uploads, supervisor live-view,
+billing/plans, SSO/OAuth, webhooks, canned responses, i18n, and horizontal
+scaling (single-node in-memory rooms are a documented limit).
 
-## 🗺️ Status / Roadmap
+## 🤝 Contributing
 
-- [x] M0 Scaffold & tooling
-- [x] M1 Signaling server + room join/presence
-- [x] M2 E2E encrypted text chat (+ typing indicators)
-- [x] M3 Voice calls (WebRTC mesh)
-- [x] M4 Video calls
-- [ ] M5 Security hardening (safety-number UI, key rotation, IndexedDB keystore)
-- [ ] M6 UI/UX polish + full QA (Playwright e2e)
+Contributions are welcome! Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) for
+the workspace layout, coding standards, and branch workflow, and
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for community expectations.
 
-## 🔏 Privacy notes (v1)
+## 🛡️ Security
 
-- No accounts, no message persistence on the server (rooms are in-memory only).
-- Identity private keys are stored in `localStorage` in v1; M5 moves these to a
-  non-extractable IndexedDB keystore.
-- Anyone with a room code can join that room — use non-guessable codes.
+See [`SECURITY.md`](SECURITY.md) for the threat model, reporting instructions,
+and [`SECURITY_AUDIT.md`](SECURITY_AUDIT.md) for the full audit log.
 
 ## 📄 License
 
