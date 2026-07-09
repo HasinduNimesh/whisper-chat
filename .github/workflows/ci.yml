@@ -40,6 +40,39 @@ jobs:
       - name: Test (server, when present)
         run: npm run test --workspace=server --if-present
 
+  db-integration:
+    name: Database integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: whisper
+          POSTGRES_PASSWORD: whisper
+          POSTGRES_DB: whisper_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U whisper -d whisper_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Server tests against Postgres
+        run: npm run test --workspace=server
+        env:
+          TEST_DATABASE_URL: postgres://whisper:whisper@localhost:5432/whisper_test
+
   docker:
     name: Docker images build
     runs-on: ubuntu-latest
