@@ -3,6 +3,11 @@
 > **Self-hosting on your own machine/VPS?** The Docker stack is the simplest
 > path — see [`docs/self-hosting.md`](docs/self-hosting.md). This document
 > covers the managed Render + Vercel alternative.
+>
+> **Note:** this split-origin setup predates the organization features. It
+> still works for the private chat app; for org/customer-chat features
+> (dashboard, widget) prefer the single-origin Docker/nginx deployments,
+> and remember the server needs `DATABASE_URL` for them.
 
 This is a managed setup for a public, always-on deployment: the
 signaling server runs on **Render** and the static client runs on **Vercel**.

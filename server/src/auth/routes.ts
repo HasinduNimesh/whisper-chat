@@ -172,6 +172,17 @@ export function registerAuthRoutes(router: Router): void {
     return sendJson(res, 200, { ok: true });
   });
 
+  // Kill every session of this account (stolen-cookie response, shared
+  // machines). Requires a live session — which is also the one that dies.
+  router.post('/api/auth/logout-all', async (req, res) => {
+    if (!checkCsrf(req, res)) return;
+    const user = await requireSession(req, res);
+    if (!user) return;
+    await deleteSessionsForUser(user.userId);
+    await endSession(req, res); // idempotent; expires the cookie
+    return sendJson(res, 200, { ok: true });
+  });
+
   router.get('/api/auth/me', async (req, res) => {
     const user = await requireSession(req, res);
     if (!user) return;

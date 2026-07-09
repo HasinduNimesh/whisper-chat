@@ -160,6 +160,20 @@ describe.skipIf(!HAS_DB)('auth API (integration)', () => {
     expect((await api('GET', '/api/auth/me', { cookie: res.cookie })).status).toBe(401);
   });
 
+  it('logout-all kills every session of the account', async () => {
+    const payload = registerPayload('logoutall');
+    const first = await api('POST', '/api/orgs', { body: payload });
+    const second = await api('POST', '/api/auth/login', {
+      body: { email: payload.email, password: payload.password },
+    });
+    expect((await api('GET', '/api/auth/me', { cookie: first.cookie })).status).toBe(200);
+    expect((await api('GET', '/api/auth/me', { cookie: second.cookie })).status).toBe(200);
+
+    await api('POST', '/api/auth/logout-all', { cookie: second.cookie });
+    expect((await api('GET', '/api/auth/me', { cookie: first.cookie })).status).toBe(401);
+    expect((await api('GET', '/api/auth/me', { cookie: second.cookie })).status).toBe(401);
+  });
+
   it('me requires a session', async () => {
     expect((await api('GET', '/api/auth/me')).status).toBe(401);
     expect((await api('GET', '/api/auth/me', { cookie: 'whisper_session=forged' })).status).toBe(401);

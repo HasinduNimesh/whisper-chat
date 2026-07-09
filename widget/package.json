@@ -1,7 +1,7 @@
 {
   "name": "@private-chat/widget",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Embeddable chat loader: one <script> tag adds a floating chat bubble backed by an isolated iframe.",
   "scripts": {

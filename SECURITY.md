@@ -44,7 +44,7 @@ What the design defends against:
 - **XSS** — all message content renders through React text nodes; no
   `dangerouslySetInnerHTML` / `innerHTML` / `eval` anywhere.
 
-Known, documented limitations (see `SECURITY_AUDIT.md` for status):
+Known, documented limitations (numbered findings in `SECURITY_AUDIT.md`):
 
 - Identity private keys are stored in browser `localStorage` (plaintext). A
   successful XSS or device compromise exposes them. Passphrase-protected
@@ -60,14 +60,49 @@ Known, documented limitations (see `SECURITY_AUDIT.md` for status):
   and routing metadata** (never plaintext). Metadata (who talks to whom, when)
   is visible to whoever operates the database.
 
-### Upcoming: organization / managed mode
+## Organization features: the two-mode threat model
 
-The roadmap adds multi-tenant organization features with a **per-org
-encryption choice**. In *managed* mode conversations are deliberately
-server-readable (the self-hosting org operates the server and owns its
-support-chat data) — that mode trades the E2E invariant for shared-inbox
-functionality, and will be documented explicitly here as it ships. E2E mode
-keeps the full invariant above.
+Multi-tenant customer chat (orgs, agents, store widget) adds a second trust
+model. Each org chooses at creation (locked once conversations exist):
+
+| | **E2E conversations** | **Managed conversations** |
+|---|---|---|
+| Server sees message content | Never (ciphertext relay + ciphertext-only storage; plaintext `send` frames are rejected with `wrong-mode`) | Yes, **by the org's explicit choice** — the org self-hosts the server and owns its support-chat data (shared inbox, handoff, history) |
+| Keys | Per agent/visitor, in each browser's storage | n/a (TLS + session/token auth) |
+| Sealed `relay` frames | The only content path | Rejected (`wrong-mode`) — modes can never silently mix |
+
+Controls that hold in **both** modes (tenant isolation & auth):
+
+- Every org-scoped query is filtered by `org_id` in SQL (never post-filtered
+  in JS); the integration suites assert cross-org blindness for reads and
+  writes, over both REST and WebSocket.
+- Staff auth: argon2id password hashes; 32-byte session tokens stored only
+  as SHA-256; `HttpOnly; SameSite=Lax; Secure` cookies with sliding expiry;
+  uniform login errors + dummy-verify timing equalization (no account
+  enumeration); per-IP and per-email rate limits; `logout-all` endpoint;
+  hourly janitor purging expired sessions/invites.
+- CSRF: state-changing dashboard requests require `X-Requested-With: fetch`
+  (forces a CORS preflight cross-site) plus an Origin allow-list/same-host
+  check; credentialed CORS reflects allow-listed origins only.
+- Store tokens: HS256 JWTs verified with the algorithm pinned, `kid`→org
+  lookup, revocation honored, lifetime capped at 10 minutes, and the `conv`
+  claim bound to exactly one conversation. Signing secrets exist only in
+  your database and the store's backend — never in any client bundle.
+- Invite links are single-use, 7-day, stored hashed.
+- Widget embedding: the iframe page is cookie-free and is the only page
+  allowed in cross-origin frames; the postMessage bridge pins exact origins
+  on both ends and identity tokens never appear in URLs. Visitor secrets
+  live in the iframe origin's (partitioned) storage, hashed at rest.
+
+Documented, accepted tradeoffs:
+
+- **Org API-key secrets are stored raw** in Postgres — HMAC verification
+  requires the key. Mitigations: DB access control, `kid` rotation,
+  revocation, one-time display.
+- **Agent/visitor E2E keys live in browser localStorage** (same caveat as
+  the private app's identity, finding #2 below).
+- **Managed mode stores plaintext** — that is the feature; protect the
+  database accordingly (disk encryption, access control, backups).
 
 ## Operational hardening for self-hosters
 

@@ -1,8 +1,8 @@
 {
   "name": "private-chat",
   "private": true,
-  "version": "0.1.0",
-  "description": "High-privacy E2E-encrypted chat with voice/video for 2-4 people",
+  "version": "0.2.0",
+  "description": "Open-source, self-hostable customer chat for organizations \u2014 E2E or managed conversations, store/marketplace widget, agent dashboard \u2014 plus the original private E2E chat.",
   "workspaces": [
     "shared",
     "server",
