@@ -17,6 +17,7 @@ import { clientIp, readJsonBody, sendJson } from './helpers.js';
 import { checkCsrf, requireRole, requireSession } from './guards.js';
 import { makeFixedWindowLimiter } from './rateLimit.js';
 import { OrgTokenError, verifyOrgToken } from '../auth/orgTokens.js';
+import { notifyInbox } from '../conversationHub.js';
 import { mintVisitor, resolveVisitor } from '../auth/visitors.js';
 import {
   addParticipant,
@@ -222,6 +223,7 @@ export function registerConversationRoutes(router: Router): void {
           externalKey: verified.convKey,
           context: verified.context ?? undefined,
         });
+        notifyInbox(verified.orgId, 'new-conversation', conversation.id);
       }
       if (conversation.status === 'closed') {
         await setConversationStatus(verified.orgId, conversation.id, 'open');
@@ -254,6 +256,7 @@ export function registerConversationRoutes(router: Router): void {
         kind: 'b2c',
         encryption: org.encryptionMode,
       });
+      notifyInbox(org.id, 'new-conversation', conversation.id);
     }
     if (b.publicKey !== undefined && !(typeof b.publicKey === 'string' && isValidPublicKey(b.publicKey))) {
       return sendJson(res, 400, { error: 'Invalid public key' });
