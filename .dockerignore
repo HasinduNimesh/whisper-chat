@@ -1,0 +1,18 @@
+# Keep build contexts small and deterministic — everything is rebuilt in-image.
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.git
+.github
+.run
+.claude
+*.log
+
+# Never bake local env/secrets into an image.
+.env
+.env.*
+!.env.example
+client/.env
+client/.env.*
+!client/.env.example

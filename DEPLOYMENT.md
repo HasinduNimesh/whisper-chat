@@ -1,6 +1,10 @@
 # Deploying Whisper: Render (server) + Vercel (client)
 
-This is the recommended setup for a public, always-on deployment: the
+> **Self-hosting on your own machine/VPS?** The Docker stack is the simplest
+> path — see [`docs/self-hosting.md`](docs/self-hosting.md). This document
+> covers the managed Render + Vercel alternative.
+
+This is a managed setup for a public, always-on deployment: the
 signaling server runs on **Render** and the static client runs on **Vercel**.
 They're two different origins, so the client talks to the server over a
 `wss://` URL baked in at build time (`VITE_SIGNALING_URL`) instead of the

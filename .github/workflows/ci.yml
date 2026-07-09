@@ -39,3 +39,15 @@ jobs:
 
       - name: Test (server, when present)
         run: npm run test --workspace=server --if-present
+
+  docker:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build server image
+        run: docker build -f server/Dockerfile -t whisper-server .
+
+      - name: Build web image
+        run: docker build -f client/Dockerfile -t whisper-web .
