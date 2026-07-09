@@ -34,6 +34,16 @@ export default defineConfig({
       'libsodium-wrappers': sodiumCjs,
     },
   },
+  build: {
+    rollupOptions: {
+      // Multi-entry: the private chat app (index) + the org staff dashboard.
+      // The legacy index entry is untouched — the original app cannot regress.
+      input: {
+        index: path.resolve(here, 'index.html'),
+        dashboard: path.resolve(here, 'dashboard.html'),
+      },
+    },
+  },
   server: {
     host: true, // bind 0.0.0.0 so other devices / tunnels can reach it
     port: 5173,

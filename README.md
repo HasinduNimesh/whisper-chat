@@ -150,15 +150,17 @@ self-hostable customer-messaging platform**. Planned, in order:
 
 - [x] Private E2E rooms, voice/video calls, handles/contacts, optional history
 - [x] **Docker self-hosting** — one-command `docker compose up` (server + Postgres + client)
-- [ ] **Multi-tenant organizations** — orgs, admin/agent roles, invites
-- [ ] **Per-org encryption mode** — orgs choose full **E2E** conversations *or*
+- [x] **Multi-tenant organizations** — orgs, admin/agent roles, invites
+      ([docs/api.md](docs/api.md), [docs/data-model.md](docs/data-model.md))
+- [x] **Per-org encryption mode** — orgs choose full **E2E** conversations *or*
       server-readable **managed** conversations (enables shared inboxes,
-      agent handoff, and history the org controls)
-- [ ] **Store & marketplace integration** — signed-token identity (HMAC JWT) so
+      agent handoff, and history the org controls) ([docs/protocol.md](docs/protocol.md))
+- [x] **Store & marketplace integration** — signed-token identity (HMAC JWT) so
       a shop or marketplace backend can securely tell Whisper who is talking:
       **B2C** (visitor/customer ↔ the org's agents) and **C2C**
-      (buyer ↔ seller about a listing)
-- [ ] **Agent dashboard** — login, shared inbox, assignment, conversation view
+      (buyer ↔ seller about a listing) ([docs/integrations.md](docs/integrations.md))
+- [x] **Agent dashboard** — login, shared inbox, assignment, conversation view
+      ([docs/dashboard.md](docs/dashboard.md))
 - [ ] **Embeddable widget** — one `<script>` tag adds a floating chat bubble
       (iframe-isolated) to any store, plus a documented JS API
 
