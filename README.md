@@ -161,8 +161,9 @@ self-hostable customer-messaging platform**. Planned, in order:
       (buyer ↔ seller about a listing) ([docs/integrations.md](docs/integrations.md))
 - [x] **Agent dashboard** — login, shared inbox, assignment, conversation view
       ([docs/dashboard.md](docs/dashboard.md))
-- [ ] **Embeddable widget** — one `<script>` tag adds a floating chat bubble
+- [x] **Embeddable widget** — one `<script>` tag adds a floating chat bubble
       (iframe-isolated) to any store, plus a documented JS API
+      ([docs/embedding.md](docs/embedding.md), demo: `examples/store-demo.html`)
 
 ### Non-goals for v1 (deliberately deferred)
 

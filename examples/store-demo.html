@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Demo store — Whisper widget</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0; background: #f6f7f9; color: #1c2733; }
+      header { background: #fff; border-bottom: 1px solid #e3e8ee; padding: 16px 24px; font-weight: 700; }
+      main { max-width: 720px; margin: 32px auto; padding: 0 16px; }
+      .product { background: #fff; border: 1px solid #e3e8ee; border-radius: 12px; padding: 24px; }
+      .price { color: #00a884; font-size: 20px; font-weight: 700; }
+      p.hint { color: #5b6b7b; font-size: 14px; }
+      code { background: #eef1f4; padding: 1px 5px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <header>🛍️ Demo Store</header>
+    <main>
+      <div class="product">
+        <h1>Blue Mountain Bike</h1>
+        <p class="price">$420</p>
+        <p>Barely used, perfect brakes, new tires. Pickup only.</p>
+        <p class="hint">
+          The chat bubble in the corner is the Whisper widget in <strong>anonymous
+          visitor mode</strong>. Serve this page from anywhere (e.g.
+          <code>python3 -m http.server 9000</code>), with the Whisper stack running
+          (<code>docker compose up</code>) and an org created in the dashboard —
+          then edit <code>orgSlug</code>/<code>url</code> below.
+        </p>
+      </div>
+    </main>
+
+    <!-- ───── Whisper chat widget ───── -->
+    <script src="http://localhost:8080/embed.js"></script>
+    <script>
+      var chat = WhisperChat.init({
+        url: 'http://localhost:8080', // your Whisper web origin
+        orgSlug: 'demo-store',        // dashboard → Settings → slug
+        theme: { primaryColor: '#00a884', position: 'right' },
+
+        // For logged-in customers or C2C threads, your backend mints a signed
+        // token (docs/integrations.md) and you pass it here instead:
+        // token: '<jwt from your backend>',
+      });
+      chat.on('unread', function (n) { console.log('unread messages:', n); });
+    </script>
+  </body>
+</html>

@@ -41,6 +41,7 @@ export default defineConfig({
       input: {
         index: path.resolve(here, 'index.html'),
         dashboard: path.resolve(here, 'dashboard.html'),
+        widget: path.resolve(here, 'widget.html'),
       },
     },
   },
