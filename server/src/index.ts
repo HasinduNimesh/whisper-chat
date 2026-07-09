@@ -10,7 +10,7 @@
  */
 import { createServer } from 'node:http';
 import { ALLOWED_ORIGINS, HOST, PORT } from './config.js';
-import { initDb } from './db/index.js';
+import { deleteExpired, getPool, initDb } from './db/index.js';
 import { createRequestListener } from './http/app.js';
 import { attachSignaling } from './ws.js';
 
@@ -20,6 +20,16 @@ attachSignaling(httpServer);
 await initDb().catch((err) => {
   console.error('[db] initDb failed — history/offline delivery disabled for this run', err);
 });
+
+// Janitor: purge expired sessions and unused expired invites hourly. Expiry
+// is already enforced at read time — this just keeps the tables tidy.
+if (getPool()) {
+  const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+  const janitor = setInterval(() => {
+    deleteExpired().catch((err) => console.error('[db] expired-row cleanup failed', err));
+  }, CLEANUP_INTERVAL_MS);
+  janitor.unref?.();
+}
 
 httpServer.listen(PORT, HOST, () => {
   console.log(`[signaling] listening on ws://${HOST ?? '0.0.0.0'}:${PORT}`);

@@ -71,9 +71,13 @@ This is a privacy-focused project. When contributing, keep these invariants:
    length-check, type-check, and reject early (see `isValidPublicKey` and the
    rate limiters in `server/src/index.ts` for the house style).
 3. **Parameterized SQL only** — never interpolate values into query strings.
-4. **No secrets in the client bundle.** Anything in `client/` (and any
-   `VITE_*` var) ships to every browser.
-5. Found a vulnerability? Follow [`SECURITY.md`](SECURITY.md) — please don't
+4. **No secrets in the client bundle.** Anything in `client/`, `widget/`
+   (and any `VITE_*` var) ships to every browser.
+5. **Tenant isolation lives in SQL.** Every query touching org-scoped tables
+   must carry an `org_id` predicate (repos take `orgId` as their first
+   parameter) — never filter cross-tenant data in JS. Add a cross-org
+   blindness assertion to the integration tests for any new query.
+6. Found a vulnerability? Follow [`SECURITY.md`](SECURITY.md) — please don't
    open a public issue for it.
 
 ## Tests

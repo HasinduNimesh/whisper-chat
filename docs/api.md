@@ -48,6 +48,10 @@ Gated by `ALLOW_ORG_SIGNUP` (default on; set `false` for closed instances).
 ### `POST /api/auth/logout`
 Destroys the session, expires the cookie. → `200 { ok: true }`
 
+### `POST /api/auth/logout-all`
+Destroys **every** session of the signed-in account (stolen-cookie response,
+shared machines). → `200 { ok: true }`
+
 ### `GET /api/auth/me`
 → `200 { org, user }` or `401`.
 

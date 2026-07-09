@@ -31,6 +31,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Dependency audit (fail on high)
+        run: npm audit --audit-level=high
+
       - name: Build all workspaces
         run: npm run build
 
