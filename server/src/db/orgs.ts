@@ -72,6 +72,15 @@ export async function updateOrgName(orgId: string, name: string): Promise<void> 
 }
 
 /**
+ * Hard-delete an org (cascades to users/sessions/etc.). Exists solely as the
+ * compensating action when org registration fails halfway (e.g. the admin
+ * email turns out to be taken after the org row was created).
+ */
+export async function deleteOrg(orgId: string): Promise<void> {
+  await requirePool().query('DELETE FROM orgs WHERE id = $1', [orgId]);
+}
+
+/**
  * Switch encryption mode — only while the org has no conversations yet (the
  * mode is snapshotted per conversation; flipping it later would strand
  * history in the other trust model). Enforced in SQL, not JS, so it holds
