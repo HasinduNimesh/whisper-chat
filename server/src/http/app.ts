@@ -11,6 +11,7 @@ import { Router } from './router.js';
 import { clientIp, originAllowed, sendJson, setCors, setCredentialedCors, readJsonBody } from './helpers.js';
 import { makeFixedWindowLimiter } from './rateLimit.js';
 import { registerAuthRoutes } from '../auth/routes.js';
+import { registerConversationRoutes } from './conversationRoutes.js';
 import { claimHandle, HandlesUnavailableError, lookupHandle } from '../db/index.js';
 import { isValidHandle, isValidPublicKey, normalizeDisplayName } from '../lib/validate.js';
 
@@ -89,13 +90,24 @@ export function createRequestListener(): (req: IncomingMessage, res: ServerRespo
   router.get('/handles/:handle', (req, res, params) => handleLookupHandle(req, res, params.handle));
 
   registerAuthRoutes(router);
+  registerConversationRoutes(router);
 
   return (req, res) => {
     const path = (req.url ?? '').split('?')[0];
 
+    // Widget routes are embedded on arbitrary store websites: open CORS,
+    // deliberately WITHOUT credentials — auth is org tokens / visitor
+    // secrets in headers, never cookies.
+    const isWidget = path.startsWith('/api/widget/');
+    if (isWidget) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Visitor-Secret, X-Org');
+    }
+
     if (req.method === 'OPTIONS') {
-      if (path.startsWith('/api/')) {
-        setCredentialedCors(req, res);
+      if (isWidget || path.startsWith('/api/')) {
+        if (!isWidget) setCredentialedCors(req, res);
         res.writeHead(204).end();
         return;
       }
@@ -107,7 +119,7 @@ export function createRequestListener(): (req: IncomingMessage, res: ServerRespo
     }
 
     // Dashboard may be served from a different (allow-listed) origin.
-    if (path.startsWith('/api/')) setCredentialedCors(req, res);
+    if (!isWidget && path.startsWith('/api/')) setCredentialedCors(req, res);
 
     if (!router.dispatch(req, res)) {
       res.writeHead(404).end();
