@@ -1,10 +1,11 @@
-import { useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
 import { useChatStore } from '../store/useChatStore';
 import { ROOM_MIN_PEERS, ROOM_MAX_PEERS } from '@private-chat/shared';
-import { Lock, Shield, Users, Refresh, Plus, ArrowLeft, Check } from '../components/icons';
+import { Lock, Shield, Users, Refresh, Plus, ArrowLeft, Check, LinkIcon } from '../components/icons';
 import { DocsLink } from '../components/DocsLink';
 import { ImportIdentityModal } from '../components/IdentityBackup';
 import { ContactsPanel } from '../components/Contacts';
+import { buildShareLink, consumeShareLinkRoom } from '../lib/shareLink';
 
 /** Unambiguous alphabet (no 0/O/1/l/i) with ~59 bits of entropy, grouped for
  * readability. Room codes are the only thing gating access, so they must be
@@ -40,13 +41,29 @@ export function JoinRoom() {
   // "now click New" step that used to gate the most common first action.
   const [room, setRoom] = useState(() => randomInviteCode());
   const [copied, setCopied] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [imported, setImported] = useState(false);
+  const [fromLink, setFromLink] = useState(false);
 
   const nameId = useId();
   const roomId = useId();
   const hintId = useId();
   const errorId = useId();
+
+  // A share link (see buildShareLink below) drops the room code in the URL
+  // fragment. Pick it up once on mount, land straight on the join tab with
+  // it prefilled, and scrub the fragment from the address bar immediately —
+  // this never auto-joins, so opening the link (e.g. a chat-app link
+  // preview bot fetching the page) can't silently seat a ghost participant.
+  useEffect(() => {
+    const linkedRoom = consumeShareLinkRoom();
+    if (linkedRoom) {
+      setRoom(linkedRoom);
+      setMode('join');
+      setFromLink(true);
+    }
+  }, []);
 
   const connecting = status === 'connecting';
   const trimmedRoom = room.trim();
@@ -55,6 +72,7 @@ export function JoinRoom() {
   function selectMode(next: Mode) {
     setMode(next);
     setCopied(false);
+    setLinkCopied(false);
     if (next === 'start') setRoom(randomInviteCode());
     if (next === 'join') setRoom('');
   }
@@ -62,12 +80,28 @@ export function JoinRoom() {
   function regenerate() {
     setRoom(randomInviteCode());
     setCopied(false);
+    setLinkCopied(false);
   }
 
   async function copyCode() {
     if (!trimmedRoom) return;
-    await navigator.clipboard.writeText(trimmedRoom);
-    setCopied(true);
+    try {
+      await navigator.clipboard.writeText(trimmedRoom);
+      setCopied(true);
+    } catch {
+      // Clipboard permission denied or unavailable — nothing to recover,
+      // the user still has the code visible in the field to select by hand.
+    }
+  }
+
+  async function copyLink() {
+    if (!trimmedRoom) return;
+    try {
+      await navigator.clipboard.writeText(buildShareLink(trimmedRoom));
+      setLinkCopied(true);
+    } catch {
+      // Same as copyCode: fail silently, code is still selectable manually.
+    }
   }
 
   function onSubmit(e: FormEvent) {
@@ -141,6 +175,8 @@ export function JoinRoom() {
                     onChange={(e) => {
                       setRoom(e.target.value);
                       setCopied(false);
+                      setLinkCopied(false);
+                      setFromLink(false);
                     }}
                     placeholder={mode === 'join' ? 'Paste the code you were sent' : 'e.g. garden-42'}
                     maxLength={128}
@@ -166,6 +202,20 @@ export function JoinRoom() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => void copyLink()}
+                      disabled={connecting || !trimmedRoom}
+                      aria-label="Copy invite link"
+                      title="Copy a shareable link"
+                      className="flex shrink-0 items-center gap-1 rounded-lg bg-wa-input px-3 text-xs font-medium text-wa-secondary ring-1 ring-transparent transition hover:text-wa-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-wa-green disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {linkCopied ? (
+                        <Check className="h-4 w-4 text-wa-green" />
+                      ) : (
+                        <LinkIcon className="h-4 w-4" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
                       onClick={regenerate}
                       disabled={connecting}
                       aria-label="Generate a new invite code"
@@ -178,8 +228,10 @@ export function JoinRoom() {
               </div>
               <p id={hintId} className="mt-1.5 text-xs text-wa-secondary">
                 {mode === 'start'
-                  ? `Share this code with up to ${ROOM_MAX_PEERS - 1} people you trust — anyone who has it can join.`
-                  : 'Ask the person who invited you for their code, then enter it above.'}
+                  ? `Share the code or link with up to ${ROOM_MAX_PEERS - 1} people you trust — anyone who has it can join, and the room disappears once everyone leaves.`
+                  : fromLink
+                    ? 'Code filled in from your invite link — add a name and join whenever you\'re ready.'
+                    : 'Ask the person who invited you for their code, then enter it above.'}
               </p>
             </Field>
 

@@ -220,3 +220,12 @@ export const FlipCamera = (p: IconProps) => (
     <path d="M15 14a3 3 0 0 1-5.2 2M9 16.5V14h2.5" />
   </Base>
 );
+
+/** Link/chain — two interlocking rounded segments. */
+export const LinkIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M9.5 14.5l5-5" />
+    <path d="M11 6.5l1-1a3.5 3.5 0 0 1 5 5l-1.5 1.5" />
+    <path d="M13 17.5l-1 1a3.5 3.5 0 0 1-5-5l1.5-1.5" />
+  </Base>
+);

@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { useChatStore } from '../store/useChatStore';
 import { typingLabel, typingNames } from '../lib/typing';
+import { buildShareLink } from '../lib/shareLink';
 import { VIDEO_CALL_MAX_PEERS, VOICE_CALL_MAX_PEERS } from '@private-chat/shared';
-import { Users, Phone, Video, Search, DotsVertical, Logout } from './icons';
+import { Users, Phone, Video, Search, DotsVertical, Logout, LinkIcon, Check } from './icons';
 
 /** Active-chat top bar: room identity + voice/video call actions. */
 export function ChatHeader() {
@@ -12,6 +14,18 @@ export function ChatHeader() {
   const inCall = useChatStore((s) => s.inCall);
   const startCall = useChatStore((s) => s.startCall);
   const leave = useChatStore((s) => s.leave);
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  async function copyInviteLink() {
+    if (!roomId) return;
+    try {
+      await navigator.clipboard.writeText(buildShareLink(roomId));
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      // Clipboard permission denied or unavailable — nothing to recover.
+    }
+  }
 
   const peerList = Object.values(peers);
   const onlineCount = peerList.filter((p) => p.online).length;
@@ -66,6 +80,13 @@ export function ChatHeader() {
           title={voiceTitle}
         >
           <Phone className="h-5 w-5" />
+        </IconBtn>
+        <IconBtn
+          onClick={() => void copyInviteLink()}
+          title={linkCopied ? 'Link copied' : 'Copy invite link'}
+          className="hidden sm:flex"
+        >
+          {linkCopied ? <Check className="h-5 w-5 text-wa-green" /> : <LinkIcon className="h-5 w-5" />}
         </IconBtn>
         <IconBtn title="Search" className="hidden sm:flex">
           <Search className="h-5 w-5" />
