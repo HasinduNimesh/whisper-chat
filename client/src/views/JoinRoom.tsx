@@ -118,22 +118,22 @@ export function JoinRoom() {
   }
 
   return (
-    <div className="relative flex h-full items-center justify-center overflow-hidden bg-wa-bg p-4">
+    <div className="relative flex h-full items-start justify-center overflow-y-auto bg-wa-bg p-4">
       {/* Layered "secure" backdrop: green wash up top fading into the app base. */}
       <div className="pointer-events-none absolute inset-x-0 top-0 h-56 bg-gradient-to-b from-wa-green-dark to-wa-bg" />
       <div className="pointer-events-none absolute left-1/2 top-8 h-72 w-72 -translate-x-1/2 rounded-full bg-wa-green/20 blur-3xl" />
 
-      <div className="relative w-full max-w-sm animate-pop-in rounded-2xl bg-wa-panel p-6 shadow-2xl ring-1 ring-wa-border motion-reduce:animate-none sm:p-8">
-        <header className="mb-7 text-center">
-          <div className="relative mx-auto mb-4 flex h-16 w-16 items-center justify-center">
+      <div className="relative my-auto w-full max-w-sm animate-pop-in rounded-2xl bg-wa-panel p-5 shadow-2xl ring-1 ring-wa-border motion-reduce:animate-none sm:p-6">
+        <header className="mb-4 text-center">
+          <div className="relative mx-auto mb-2.5 flex h-12 w-12 items-center justify-center">
             {/* Soft halo behind the lock to reinforce the privacy cue. */}
             <span className="absolute inset-0 rounded-full bg-wa-green/25 blur-md" aria-hidden="true" />
-            <span className="relative flex h-14 w-14 items-center justify-center rounded-full bg-wa-green text-white shadow-lg shadow-wa-green/30 ring-1 ring-white/10">
-              <Lock className="h-7 w-7" />
+            <span className="relative flex h-10 w-10 items-center justify-center rounded-full bg-wa-green text-white shadow-lg shadow-wa-green/30 ring-1 ring-white/10">
+              <Lock className="h-5 w-5" />
             </span>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-wa-primary">Whisper</h1>
-          <p className="mx-auto mt-1.5 max-w-[16rem] text-sm text-wa-secondary">
+          <h1 className="text-xl font-bold tracking-tight text-wa-primary">Whisper</h1>
+          <p className="mx-auto mt-1 text-xs text-wa-secondary">
             End-to-end encrypted chat &amp; calls for {ROOM_MIN_PEERS}&ndash;{ROOM_MAX_PEERS} people
           </p>
         </header>
@@ -153,7 +153,7 @@ export function JoinRoom() {
           </FieldShell>
         </Field>
 
-        <div className="mt-4 grid grid-cols-3 gap-1 rounded-lg bg-wa-input p-1 text-xs font-medium">
+        <div className="mt-3 grid grid-cols-3 gap-1 rounded-lg bg-wa-input p-1 text-xs font-medium">
           <ModeTab active={mode === 'start'} onClick={() => selectMode('start')}>
             Start new
           </ModeTab>
@@ -166,11 +166,11 @@ export function JoinRoom() {
         </div>
 
         {mode === 'contacts' ? (
-          <div className="mt-4">
+          <div className="mt-3">
             <ContactsPanel myDisplayName={name} />
           </div>
         ) : (
-          <form onSubmit={onSubmit} className="mt-4 space-y-4" aria-busy={connecting} noValidate>
+          <form onSubmit={onSubmit} className="mt-3 space-y-3" aria-busy={connecting} noValidate>
             <Field label="Invite code" htmlFor={roomId}>
               <div className="flex gap-2">
                 <FieldShell icon={<Lock className="h-4 w-4" />}>
@@ -233,7 +233,7 @@ export function JoinRoom() {
               </div>
               <p id={hintId} className="mt-1.5 text-xs text-wa-secondary">
                 {mode === 'start'
-                  ? `Share the code or link with up to ${ROOM_MAX_PEERS - 1} people you trust — anyone who has it can join, and the room disappears once everyone leaves.`
+                  ? `Share with up to ${ROOM_MAX_PEERS - 1} people — the room disappears once everyone leaves.`
                   : fromLink
                     ? 'Code filled in from your invite link — add a name and join whenever you\'re ready.'
                     : 'Ask the person who invited you for their code, then enter it above.'}
@@ -243,26 +243,19 @@ export function JoinRoom() {
             {mode === 'start' && (
               <label
                 htmlFor={ephemeralId}
-                className="flex cursor-pointer items-start gap-3 rounded-lg bg-wa-input px-3.5 py-3 ring-1 ring-transparent transition has-[:checked]:ring-wa-green"
+                title="Nothing about this room — not messages, not who joined — is ever written to the server's database. History and offline delivery won't work, and it can't be turned on later once the room exists."
+                className="flex cursor-pointer items-center gap-2.5 rounded-lg bg-wa-input px-3.5 py-2.5 ring-1 ring-transparent transition has-[:checked]:ring-wa-green"
               >
-                <span className="mt-0.5 text-wa-secondary">
-                  <Flame className="h-4 w-4" />
-                </span>
-                <span className="flex-1">
-                  <span className="block text-sm font-medium text-wa-primary">Temporary chat</span>
-                  <span className="mt-0.5 block text-xs text-wa-secondary">
-                    Nothing about this room — not messages, not who joined — is ever written to
-                    the server&apos;s database. History and offline delivery won&apos;t work, and
-                    it can&apos;t be turned on later once the room exists.
-                  </span>
-                </span>
+                <Flame className="h-4 w-4 shrink-0 text-wa-secondary" />
+                <span className="flex-1 text-sm font-medium text-wa-primary">Temporary chat</span>
+                <span className="text-[11px] text-wa-secondary">Nothing saved</span>
                 <input
                   id={ephemeralId}
                   type="checkbox"
                   checked={ephemeral}
                   onChange={(e) => setEphemeral(e.target.checked)}
                   disabled={connecting}
-                  className="mt-0.5 h-4 w-4 shrink-0 accent-wa-green"
+                  className="h-4 w-4 shrink-0 accent-wa-green"
                 />
               </label>
             )}
@@ -300,7 +293,7 @@ export function JoinRoom() {
           </form>
         )}
 
-        <div className="mt-7 flex items-center justify-center gap-4 border-t border-wa-border pt-5 text-[11px] text-wa-secondary">
+        <div className="mt-5 flex items-center justify-center gap-4 border-t border-wa-border pt-3.5 text-[11px] text-wa-secondary">
           <Badge icon={<Lock className="h-3.5 w-3.5" />}>E2E encrypted</Badge>
           <Badge icon={<Users className="h-3.5 w-3.5" />}>
             {ROOM_MIN_PEERS}&ndash;{ROOM_MAX_PEERS} people
@@ -308,7 +301,7 @@ export function JoinRoom() {
           <Badge icon={<Shield className="h-3.5 w-3.5" />}>No accounts</Badge>
         </div>
 
-        <div className="mt-4 text-center">
+        <div className="mt-3 text-center">
           {imported ? (
             <p className="text-xs text-wa-green">Identity imported — join a chat to use it.</p>
           ) : (
