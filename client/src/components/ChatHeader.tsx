@@ -3,12 +3,13 @@ import { useChatStore } from '../store/useChatStore';
 import { typingLabel, typingNames } from '../lib/typing';
 import { buildShareLink } from '../lib/shareLink';
 import { VIDEO_CALL_MAX_PEERS, VOICE_CALL_MAX_PEERS } from '@private-chat/shared';
-import { Users, Phone, Video, Search, DotsVertical, Logout, LinkIcon, Check } from './icons';
+import { Users, Phone, Video, Search, DotsVertical, Logout, LinkIcon, Check, Flame } from './icons';
 
 /** Active-chat top bar: room identity + voice/video call actions. */
 export function ChatHeader() {
   const roomId = useChatStore((s) => s.roomId);
   const displayName = useChatStore((s) => s.displayName);
+  const ephemeral = useChatStore((s) => s.ephemeral);
   const peers = useChatStore((s) => s.peers);
   const typingPeers = useChatStore((s) => s.typingPeers);
   const inCall = useChatStore((s) => s.inCall);
@@ -56,6 +57,14 @@ export function ChatHeader() {
           <code className="hidden rounded bg-white/5 px-1.5 text-[11px] text-wa-secondary sm:inline">
             {onlineCount + 1} online
           </code>
+          {ephemeral && (
+            <span
+              className="flex shrink-0 items-center gap-1 rounded bg-wa-green/15 px-1.5 py-0.5 text-[11px] font-medium text-wa-green"
+              title="Nothing about this room is stored server-side — no history, no offline delivery."
+            >
+              <Flame className="h-3 w-3" /> Temporary
+            </span>
+          )}
         </div>
         {typing ? (
           <p className="truncate text-xs text-wa-green">{typing}</p>

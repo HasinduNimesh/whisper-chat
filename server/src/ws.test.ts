@@ -113,6 +113,36 @@ describe('legacy room protocol (regression, no DB)', () => {
     a.close();
   });
 
+  it('ephemeral is fixed by the room creator and reported to every joiner, regardless of what they request', async () => {
+    const ephemeralRoom = `test-room-eph-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+
+    const a = new TestClient();
+    await a.open();
+    a.send({ type: 'join', roomId: ephemeralRoom, publicKey: KEY_A, displayName: 'Alice', ephemeral: true });
+    const joinedA = await a.next((m) => m.type === 'joined');
+    expect(joinedA.type === 'joined' && joinedA.ephemeral).toBe(true);
+
+    // Bob doesn't ask for ephemeral, but the room was already created that
+    // way — the server's answer must not depend on what Bob's client sends.
+    const b = new TestClient();
+    await b.open();
+    b.send({ type: 'join', roomId: ephemeralRoom, publicKey: KEY_B, displayName: 'Bob', ephemeral: false });
+    const joinedB = await b.next((m) => m.type === 'joined');
+    expect(joinedB.type === 'joined' && joinedB.ephemeral).toBe(true);
+
+    a.close();
+    b.close();
+  });
+
+  it('a normal room reports ephemeral: false', async () => {
+    const a = new TestClient();
+    await a.open();
+    a.send({ type: 'join', roomId: roomOne, publicKey: KEY_A, displayName: 'Alice' });
+    const joinedA = await a.next((m) => m.type === 'joined');
+    expect(joinedA.type === 'joined' && joinedA.ephemeral).toBe(false);
+    a.close();
+  });
+
   it('rejects invalid joins: bad key, reserved conv: prefix, double join', async () => {
     const c = new TestClient();
     await c.open();

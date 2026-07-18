@@ -58,6 +58,14 @@ interface ChatState {
   roomId: string | null;
   selfId: string | null;
   displayName: string;
+  /**
+   * Server-confirmed: this room was created ephemeral, so nothing about it
+   * — membership or message ciphertext — is ever written to the database.
+   * Requested at join time but only takes effect if the room is new; a room
+   * someone else already started keeps whatever mode it was created with,
+   * so this reflects the server's answer, not the request.
+   */
+  ephemeral: boolean;
   identity: Identity | null;
   peers: Record<string, RosterEntry>; // publicKey -> roster entry
   messages: ChatMessage[];
@@ -81,7 +89,7 @@ interface ChatState {
   /** Load (or create) the local identity without joining a room — e.g. so a
    * "share my contact code" UI has a public key before you've ever joined. */
   ensureIdentity: () => Promise<Identity>;
-  join: (roomId: string, displayName: string) => Promise<void>;
+  join: (roomId: string, displayName: string, ephemeral?: boolean) => Promise<void>;
   sendText: (text: string) => void;
   sendTyping: (isTyping: boolean) => void;
   leave: () => void;
@@ -124,6 +132,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   roomId: null,
   selfId: null,
   displayName: '',
+  ephemeral: false,
   identity: null,
   peers: {},
   messages: [],
@@ -149,7 +158,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return identity;
   },
 
-  join: async (roomId, displayName) => {
+  join: async (roomId, displayName, ephemeral = false) => {
     set({ status: 'connecting', errorText: null, displayName });
     const identity = await get().ensureIdentity();
 
@@ -161,6 +170,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           roomId,
           publicKey: toB64(identity.publicKey),
           displayName,
+          ephemeral,
         });
       },
       onClose: () => {
@@ -174,19 +184,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendText: (text) => {
-    const { identity, peers, selfId, displayName } = get();
+    const { identity, peers, selfId, displayName, ephemeral } = get();
     if (!identity || !selfId || !client) return;
     const trimmed = text.trim();
     if (!trimmed) return;
 
     const payload: ChatPayload = { kind: 'text', text: trimmed, sentAt: Date.now() };
     const serialized = JSON.stringify(payload);
+    // In an ephemeral room the server ignores this and never persists
+    // regardless (room.ephemeral wins server-side, see ws.ts) — set it
+    // correctly anyway so this stays true even before that server-side
+    // enforcement, and so a room log inspection matches client intent.
+    const persist = !ephemeral;
 
     // Encrypt and relay separately to every known member — online or not,
     // addressed by their permanent public key (peers state is never keyed
     // by the ephemeral PeerId). The server live-delivers if they're
-    // connected and always persists, so this is what makes offline
-    // delivery and history work.
+    // connected, and persists (unless the room is ephemeral) — that's what
+    // makes offline delivery and history work in a non-ephemeral room.
     for (const peer of Object.values(peers)) {
       const sealed = sealTo(serialized, fromB64(peer.publicKey), identity.privateKey);
       client.send({
@@ -194,20 +209,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
         to: peer.publicKey,
         ciphertext: sealed.ciphertext,
         nonce: sealed.nonce,
-        persist: true,
+        persist,
       });
     }
     // Also seal a copy to ourselves, purely so this message is persisted and
     // recoverable later (reload, or another device sharing this identity).
     // The server never live-delivers a self-addressed message back to us.
-    const selfSealed = sealTo(serialized, identity.publicKey, identity.privateKey);
-    client.send({
-      type: 'relay',
-      to: toB64(identity.publicKey),
-      ciphertext: selfSealed.ciphertext,
-      nonce: selfSealed.nonce,
-      persist: true,
-    });
+    // Pointless (and skipped) in an ephemeral room — there's nothing to persist.
+    if (persist) {
+      const selfSealed = sealTo(serialized, identity.publicKey, identity.privateKey);
+      client.send({
+        type: 'relay',
+        to: toB64(identity.publicKey),
+        ciphertext: selfSealed.ciphertext,
+        nonce: selfSealed.nonce,
+        persist: true,
+      });
+    }
 
     // Echo into our own log immediately.
     set((st) => ({
@@ -258,6 +276,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       status: 'idle',
       roomId: null,
       selfId: null,
+      ephemeral: false,
       peers: {},
       messages: [],
       typingPeers: {},
@@ -629,7 +648,16 @@ function handleServerMessage(
         messages.sort((a, b) => a.sentAt - b.sentAt);
       }
 
-      set({ status: 'joined', roomId: msg.roomId, selfId: msg.selfId, peers, verifiedPeers, keyAlerts, messages });
+      set({
+        status: 'joined',
+        roomId: msg.roomId,
+        selfId: msg.selfId,
+        peers,
+        verifiedPeers,
+        keyAlerts,
+        messages,
+        ephemeral: msg.ephemeral,
+      });
       // Stand up the call mesh and hold idle connections to everyone already
       // online, so any later call (or inbound offer) negotiates instantly.
       mesh = createMesh(msg.selfId, msg.iceServers, set);

@@ -21,6 +21,15 @@ export interface Peer {
 export interface Room {
   id: string;
   peers: Map<PeerId, Peer>;
+  /**
+   * Set once, by whoever creates the room, and immutable after that — a
+   * later joiner can't quietly downgrade an ephemeral room's guarantee (or
+   * vice versa) just by requesting a different value. When true, ws.ts
+   * skips every DB touchpoint for this room: no durable membership row, no
+   * history read on join, and every relay is forced non-persisting no
+   * matter what the sender's client asks for.
+   */
+  ephemeral: boolean;
 }
 
 const rooms = new Map<string, Room>();
@@ -38,11 +47,14 @@ export type JoinResult =
   | { ok: true; room: Room }
   | { ok: false; reason: 'room-full' };
 
-/** Add a peer to a room (creating the room if needed). Enforces the 4-peer cap. */
-export function joinRoom(roomId: string, peer: Peer): JoinResult {
+/**
+ * Add a peer to a room (creating the room if needed). Enforces the 4-peer
+ * cap. `ephemeral` only takes effect on creation — see `Room.ephemeral`.
+ */
+export function joinRoom(roomId: string, peer: Peer, ephemeral = false): JoinResult {
   let room = rooms.get(roomId);
   if (!room) {
-    room = { id: roomId, peers: new Map() };
+    room = { id: roomId, peers: new Map(), ephemeral };
     rooms.set(roomId, room);
   }
   if (room.peers.size >= ROOM_MAX_PEERS) {

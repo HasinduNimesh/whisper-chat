@@ -96,6 +96,7 @@ async function handleJoin(
   roomId: string,
   publicKey: string,
   displayName: string,
+  ephemeral: boolean,
 ): Promise<void> {
   if (peerOf.has(socket) || isConversationClient(socket)) {
     fail(socket, 'bad-request', 'Already in a room');
@@ -128,12 +129,14 @@ async function handleJoin(
     displayName: trimmedName,
     roomId,
   };
-  const result = joinRoom(roomId, peer);
+  const result = joinRoom(roomId, peer, ephemeral);
   if (!result.ok) {
     fail(socket, 'room-full', `This room is full (max ${ROOM_MAX_PEERS} people)`);
     return;
   }
   peerOf.set(socket, peer);
+  // Server-authoritative: fixed by whoever created the room, see rooms.ts.
+  const roomIsEphemeral = result.room.ephemeral;
 
   // Announce the newcomer to everyone else right away; don't make them wait
   // on the TURN fetch / DB round-trips below.
@@ -147,13 +150,20 @@ async function handleJoin(
   // available live roster (works even with no DB configured, matching
   // today's behavior exactly) with the durable one (adds previously-seen,
   // currently-offline members — a no-op when persistence isn't set up).
-  await upsertRoomMember(roomId, publicKey, trimmedName).catch((err) =>
-    console.error('[db] upsertRoomMember failed', err),
-  );
-  const durableMembers = await fetchRoomMembers(roomId, publicKey).catch((err) => {
-    console.error('[db] fetchRoomMembers failed', err);
-    return [];
-  });
+  // Ephemeral rooms skip this entirely: not just message content, but the
+  // "who was in this room" metadata too — nothing about the room touches
+  // the database, full stop.
+  const durableMembers = roomIsEphemeral
+    ? []
+    : await (async () => {
+        await upsertRoomMember(roomId, publicKey, trimmedName).catch((err) =>
+          console.error('[db] upsertRoomMember failed', err),
+        );
+        return fetchRoomMembers(roomId, publicKey).catch((err) => {
+          console.error('[db] fetchRoomMembers failed', err);
+          return [];
+        });
+      })();
   const membersByKey = new Map<string, RoomMember>();
   for (const other of result.room.peers.values()) {
     if (other.id === peer.id) continue;
@@ -172,11 +182,21 @@ async function handleJoin(
   const members = [...membersByKey.values()];
 
   const iceServers = await fetchTurnCredentials();
-  const history = await fetchHistory(roomId, publicKey).catch((err) => {
-    console.error('[db] fetchHistory failed', err);
-    return [];
+  const history = roomIsEphemeral
+    ? []
+    : await fetchHistory(roomId, publicKey).catch((err) => {
+        console.error('[db] fetchHistory failed', err);
+        return [];
+      });
+  send(socket, {
+    type: 'joined',
+    selfId: peer.id,
+    roomId,
+    members,
+    iceServers,
+    history,
+    ephemeral: roomIsEphemeral,
   });
-  send(socket, { type: 'joined', selfId: peer.id, roomId, members, iceServers, history });
 }
 
 function handleLeave(socket: WebSocket): void {
@@ -216,7 +236,10 @@ async function handleRelay(socket: WebSocket, msg: Extract<ClientMessage, { type
   if (target && target.id !== peer.id) {
     send(target.socket, { type: 'deliver', from: peer.publicKey, ciphertext: msg.ciphertext, nonce: msg.nonce });
   }
-  if (msg.persist) {
+  // room.ephemeral overrides msg.persist unconditionally — the guarantee
+  // must hold even against a stale/buggy/malicious client that still sends
+  // persist:true, since the room's mode was fixed at creation, not per message.
+  if (msg.persist && !room.ephemeral) {
     await persistMessage({
       roomId: peer.roomId,
       recipientPublicKey: msg.to,
@@ -295,7 +318,7 @@ export function attachSignaling(httpServer: Server): WebSocketServer {
       }
       switch (msg?.type) {
         case 'join':
-          return handleJoin(socket, msg.roomId, msg.publicKey, msg.displayName);
+          return handleJoin(socket, msg.roomId, msg.publicKey, msg.displayName, Boolean(msg.ephemeral));
         case 'leave':
           return handleLeave(socket);
         case 'relay':

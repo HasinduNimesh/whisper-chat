@@ -229,3 +229,10 @@ export const LinkIcon = (p: IconProps) => (
     <path d="M13 17.5l-1 1a3.5 3.5 0 0 1-5-5l1.5-1.5" />
   </Base>
 );
+
+/** Flame — "self-destructing / nothing saved" cue for ephemeral rooms. */
+export const Flame = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 3c1 3-3 4-3 8a3 3 0 0 0 6 0c1.5 1 2 2.8 2 4a5 5 0 0 1-10 0c0-4 2-6 2-8 0 1.5 1 2 1.5 2C11 7 11 4.5 12 3z" />
+  </Base>
+);

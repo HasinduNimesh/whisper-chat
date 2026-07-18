@@ -74,6 +74,15 @@ export interface JoinRoomMessage {
   roomId: string;
   publicKey: string;
   displayName: string;
+  /**
+   * Requested only when this join creates the room (ignored on an existing
+   * one — the mode is fixed by whoever created it, see `Room.ephemeral` on
+   * the server). When true, the server never writes membership or message
+   * ciphertext to the database for this room, regardless of what any later
+   * `relay.persist` says — see JoinedMessage.ephemeral for the confirmed,
+   * server-authoritative value.
+   */
+  ephemeral?: boolean;
 }
 
 export interface LeaveRoomMessage {
@@ -187,6 +196,13 @@ export interface JoinedMessage {
   iceServers: IceServerLike[];
   /** Decryptable history addressed to our own public key, oldest first. */
   history: HistoryEntry[];
+  /**
+   * Server-authoritative: whether this room was created as ephemeral (no DB
+   * writes at all — not membership, not message ciphertext). Fixed at
+   * creation and the same for every member, regardless of what any
+   * individual joiner requested.
+   */
+  ephemeral: boolean;
 }
 
 /** A room's durable member record — may or may not be currently connected. */

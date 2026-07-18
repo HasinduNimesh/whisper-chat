@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
 import { useChatStore } from '../store/useChatStore';
 import { ROOM_MIN_PEERS, ROOM_MAX_PEERS } from '@private-chat/shared';
-import { Lock, Shield, Users, Refresh, Plus, ArrowLeft, Check, LinkIcon } from '../components/icons';
+import { Lock, Shield, Users, Refresh, Plus, ArrowLeft, Check, LinkIcon, Flame } from '../components/icons';
 import { DocsLink } from '../components/DocsLink';
 import { ImportIdentityModal } from '../components/IdentityBackup';
 import { ContactsPanel } from '../components/Contacts';
@@ -45,11 +45,16 @@ export function JoinRoom() {
   const [importOpen, setImportOpen] = useState(false);
   const [imported, setImported] = useState(false);
   const [fromLink, setFromLink] = useState(false);
+  // Only meaningful when *creating* a room — it's fixed server-side at
+  // creation (see rooms.ts Room.ephemeral) and can't be changed by whoever
+  // joins later, so there's no toggle on the "Have a code" tab.
+  const [ephemeral, setEphemeral] = useState(false);
 
   const nameId = useId();
   const roomId = useId();
   const hintId = useId();
   const errorId = useId();
+  const ephemeralId = useId();
 
   // A share link (see buildShareLink below) drops the room code in the URL
   // fragment. Pick it up once on mount, land straight on the join tab with
@@ -109,7 +114,7 @@ export function JoinRoom() {
     if (connecting) return;
     const trimmedName = name.trim() || 'Anonymous';
     if (!trimmedRoom) return;
-    void join(trimmedRoom, trimmedName);
+    void join(trimmedRoom, trimmedName, mode === 'start' && ephemeral);
   }
 
   return (
@@ -234,6 +239,33 @@ export function JoinRoom() {
                     : 'Ask the person who invited you for their code, then enter it above.'}
               </p>
             </Field>
+
+            {mode === 'start' && (
+              <label
+                htmlFor={ephemeralId}
+                className="flex cursor-pointer items-start gap-3 rounded-lg bg-wa-input px-3.5 py-3 ring-1 ring-transparent transition has-[:checked]:ring-wa-green"
+              >
+                <span className="mt-0.5 text-wa-secondary">
+                  <Flame className="h-4 w-4" />
+                </span>
+                <span className="flex-1">
+                  <span className="block text-sm font-medium text-wa-primary">Temporary chat</span>
+                  <span className="mt-0.5 block text-xs text-wa-secondary">
+                    Nothing about this room — not messages, not who joined — is ever written to
+                    the server&apos;s database. History and offline delivery won&apos;t work, and
+                    it can&apos;t be turned on later once the room exists.
+                  </span>
+                </span>
+                <input
+                  id={ephemeralId}
+                  type="checkbox"
+                  checked={ephemeral}
+                  onChange={(e) => setEphemeral(e.target.checked)}
+                  disabled={connecting}
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-wa-green"
+                />
+              </label>
+            )}
 
             {errorText && (
               <p
